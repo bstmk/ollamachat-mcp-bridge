@@ -9,6 +9,9 @@
  *   or:  ./ollama-tool-chat.js "Current BTC price?"
  *
  * Requires: MCP bridge running on localhost:3100 (./start.sh)
+ *
+ * The hardened bridge denies this client. It does not send Tailscale identity
+ * headers, and those headers are not a supported login for the iOS app.
  */
 
 const http = require('http');

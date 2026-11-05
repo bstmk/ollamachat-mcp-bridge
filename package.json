@@ -1,14 +1,13 @@
 {
   "name": "mcp-to-http-bridge",
-  "version": "1.0.0",
-  "description": "Bridges stdio-based MCP servers to HTTP so Android apps can call them",
+  "version": "2.0.0",
+  "description": "Loopback MCP-to-HTTP bridge for OllamaChat, gated by a Tailscale Serve identity and a fail-closed Peekaboo allowlist",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --config mcp-config.json"
+    "test": "node --test"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.18.2"
   },
   "engines": {

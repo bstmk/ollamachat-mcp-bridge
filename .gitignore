@@ -2,5 +2,6 @@ node_modules/
 .env
 *.log
 mcp-config.json
+bridge-policy.json
 .DS_Store
 *.sh.bak
