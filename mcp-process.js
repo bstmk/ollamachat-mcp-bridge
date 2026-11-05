@@ -70,6 +70,13 @@ class McpProcess extends EventEmitter {
 
     const { command, args = [], env = {} } = this.config;
     const childEnv = { ...process.env, ...env };
+    for (const key of this.config.stripEnv || []) delete childEnv[key];
+    if (Object.prototype.hasOwnProperty.call(env, 'PEEKABOO_ALLOW_TOOLS')) {
+      childEnv.PEEKABOO_ALLOW_TOOLS = env.PEEKABOO_ALLOW_TOOLS;
+    }
+    if (Object.prototype.hasOwnProperty.call(env, 'PEEKABOO_DISABLE_TOOLS')) {
+      childEnv.PEEKABOO_DISABLE_TOOLS = env.PEEKABOO_DISABLE_TOOLS;
+    }
 
     this._log(`Spawning: ${command} ${args.join(' ')}`);
 
@@ -77,6 +84,7 @@ class McpProcess extends EventEmitter {
       this.proc = spawn(command, args, {
         env: childEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
       });
     } catch (err) {
       this._error(`Failed to spawn: ${err.message}`);

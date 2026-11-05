@@ -1,15 +1,43 @@
 {
   "name": "mcp-to-http-bridge",
-  "version": "1.0.0",
-  "description": "Bridges stdio-based MCP servers to HTTP so Android apps can call them",
+  "version": "2.0.6",
+  "description": "Loopback MCP-to-HTTP bridge for OllamaChat, gated by a Tailscale Serve identity and a fail-closed Peekaboo allowlist",
   "main": "server.js",
+  "files": [
+    "server.js",
+    "security-policy.js",
+    "ollama-proxy.js",
+    "diagnostics.js",
+    "mcp-manager.js",
+    "mcp-process.js",
+    "sse-handler.js",
+    "streamable-handler.js",
+    "ollama-tool-chat.js",
+    "bridge-policy.example.json",
+    "custom-tools.json",
+    "mcp-config.example.json",
+    "README.md",
+    "start.sh",
+    "start-all.sh",
+    "calendar-events.sh",
+    "verse-of-the-day.sh",
+    "docs",
+    "scripts/run-tests.js",
+    "scripts/pack-release.sh",
+    "test"
+  ],
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --config mcp-config.json"
+    "test": "node scripts/run-tests.js",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "4.22.3"
+  },
+  "overrides": {
+    "body-parser": "1.20.9",
+    "proxy-addr": "2.0.8",
+    "qs": "6.16.1"
   },
   "engines": {
     "node": ">=18.0.0"

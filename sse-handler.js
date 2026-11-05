@@ -29,7 +29,7 @@ setInterval(() => {
       sessions.delete(id);
     }
   }
-}, 60_000);
+}, 60_000).unref();
 
 function createSessionId() {
   return crypto.randomUUID();
@@ -87,11 +87,9 @@ function createSSEHandler(manager) {
       'X-Accel-Buffering': 'no',
     });
 
-    // Send endpoint event with absolute URL (MCP SDK resolves relative paths against SSE URL)
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-    const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3100';
-    const baseUrl = `${protocol}://${host}`;
-    res.write(`event: endpoint\ndata: ${baseUrl}/messages?sessionId=${sessionId}\n\n`);
+    // Relative endpoint. Clients resolve it against the URL they already used
+    // (the Tailscale Serve URL). Do not reflect Host or X-Forwarded-* here.
+    res.write(`event: endpoint\ndata: /messages?sessionId=${sessionId}\n\n`);
 
     sessions.set(sessionId, { res, createdAt: Date.now() });
 
@@ -103,6 +101,7 @@ function createSSEHandler(manager) {
         clearInterval(pingInterval);
       }
     }, 30_000);
+    if (typeof pingInterval.unref === 'function') pingInterval.unref();
 
     req.on('close', () => {
       clearInterval(pingInterval);

@@ -10,9 +10,9 @@
  *   DELETE /mcp — 405 (server is stateless; no sessions to terminate)
  *
  * Statelessness: no Mcp-Session-Id is issued. This is spec-legal and keeps
- * restarts cheap. For clients that insist on Origin validation we mirror the
- * 2025-06-18 DNS-rebinding rule: reject cross-origin requests, allow
- * same-origin / null / non-browser origins through.
+ * restarts cheap. Host, Origin, and Tailscale identity are enforced for every
+ * route before this handler runs. A present Origin is denied unless the
+ * operator listed that exact origin. "null" is not treated as same-origin.
  *
  * JSON-RPC methods supported:
  *   initialize                  — handshake, echoes a supported protocol version
@@ -52,24 +52,6 @@ function rpcResult(res, id, result) {
 
 function rpcError(res, id, code, message) {
   res.status(200).json({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
-}
-
-/**
- * Origin guard per 2025-06-18 §2.9: if Origin is present and its host:port
- * differs from the Host header, reject. Allow 'null' (extensions) and
- * non-http origins (native clients).
- */
-function originAllowed(req) {
-  const origin = req.headers.origin;
-  if (!origin) return true;
-  if (origin === 'null') return true;
-  try {
-    const o = new URL(origin);
-    if (o.protocol !== 'http:' && o.protocol !== 'https:') return true;
-    return o.host === req.headers.host;
-  } catch (_) {
-    return true;
-  }
 }
 
 async function handleSingle(req, res, manager, msg) {
@@ -132,10 +114,6 @@ async function handleSingle(req, res, manager, msg) {
 
 function createStreamableHandler(manager) {
   async function handlePost(req, res) {
-    if (!originAllowed(req)) {
-      return res.status(403).json({ error: 'Forbidden', detail: 'Cross-origin request rejected' });
-    }
-
     const body = req.body;
     if (body === undefined || body === null) {
       return rpcError(res, null, -32700, 'Parse error');

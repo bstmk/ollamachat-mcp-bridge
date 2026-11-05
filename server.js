@@ -2,45 +2,45 @@
 
 /**
  * server.js
- * MCP-to-HTTP Bridge Server
+ * MCP-to-HTTP bridge for OllamaChat.
  *
- * Spawns stdio-based MCP servers as child processes and exposes
- * their tools over HTTP so an Android app (or any HTTP client) can call them.
- *
- * Usage:
- *   node server.js [--config <path>] [--port <number>]
- *
- * Environment variables:
- *   PORT        — HTTP port (default: 3100)
- *   CONFIG      — path to mcp-config.json
+ * Listens on loopback only. Every HTTP, SSE, and Streamable HTTP path is
+ * gated by bridge-policy.json. Tailscale Serve is the supported remote path:
+ * the iOS app sends a URL and no bearer token, and Serve attaches identity
+ * headers. Configuration and custom-tool routes cannot mutate the process.
  */
 
 const express = require('express');
-const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 
-const { McpManager, getBraveKey, setBraveKey } = require('./mcp-manager');
+const { McpManager } = require('./mcp-manager');
 const { createSSEHandler } = require('./sse-handler');
 const { createStreamableHandler } = require('./streamable-handler');
-
-// ─── CLI / env args ───────────────────────────────────────────────────────────
+const {
+  PolicyError,
+  assertLoopbackHost,
+  authorizeHttp,
+  defaultPolicy,
+  loadPolicyFile,
+  toolAllowed,
+  narrowedInputSchema,
+  prepareToolCall,
+  presentToolResult,
+} = require('./security-policy');
+const { proxyOllama } = require('./ollama-proxy');
+const diagnostics = require('./diagnostics');
 
 function parseArgs() {
   const args = process.argv.slice(2);
   const result = {};
-  for (let i = 0; i < args.length; i++) {
+  for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--config' && args[i + 1]) result.config = args[++i];
     if (args[i] === '--port' && args[i + 1]) result.port = parseInt(args[++i], 10);
+    if (args[i] === '--host' && args[i + 1]) result.host = args[++i];
   }
   return result;
 }
-
-const cliArgs = parseArgs();
-const PORT = cliArgs.port || parseInt(process.env.PORT || '3100', 10);
-const CONFIG_PATH = cliArgs.config || process.env.CONFIG || path.join(__dirname, 'mcp-config.json');
-
-// ─── Logging ──────────────────────────────────────────────────────────────────
 
 function ts() {
   return new Date().toISOString();
@@ -54,259 +54,262 @@ function logError(msg, err) {
   console.error(`[${ts()}] [server] ERROR: ${msg}`, err ? err.stack || err.message || err : '');
 }
 
-// ─── Load config ──────────────────────────────────────────────────────────────
-
-function loadConfig(configPath) {
-  const resolved = path.resolve(configPath);
-  if (!fs.existsSync(resolved)) {
-    logError(`Config file not found: ${resolved}`);
-    process.exit(1);
-  }
-  try {
-    const raw = fs.readFileSync(resolved, 'utf8');
-    const cfg = JSON.parse(raw);
-    log(`Loaded config from ${resolved} — ${Object.keys(cfg).length} server(s) defined`);
-    return cfg;
-  } catch (err) {
-    logError(`Failed to parse config file: ${resolved}`, err);
-    process.exit(1);
-  }
+function guardManager(inner, policy) {
+  return {
+    getStatus() {
+      return inner.getStatus();
+    },
+    async getTools() {
+      const tools = await inner.getTools();
+      return tools.filter((tool) => tool && toolAllowed(policy, tool.name)).map((tool) => {
+        const bare = String(tool.name || '').split('__').pop();
+        const schema = narrowedInputSchema(bare);
+        return schema ? { ...tool, inputSchema: schema } : tool;
+      });
+    },
+    async getToolsOpenAI() {
+      const tools = await this.getTools();
+      return tools.map((tool) => ({
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      }));
+    },
+    async callTool(name, args) {
+      let prepared;
+      try {
+        prepared = prepareToolCall(policy, name, args || {});
+      } catch (err) {
+        diagnostics.noteToolAttempt({ tool: name, dispatched: 0, is_error: true });
+        throw err;
+      }
+      const result = await inner.callTool(prepared.name, prepared.args);
+      const presented = presentToolResult(prepared.bare, result);
+      diagnostics.noteToolAttempt({
+        tool: prepared.name,
+        dispatched: 1,
+        is_error: Boolean(presented && presented.isError),
+      });
+      return presented;
+    },
+    startAll() {
+      return inner.startAll();
+    },
+    stopAll() {
+      return inner.stopAll();
+    },
+  };
 }
 
-// ─── Express app ──────────────────────────────────────────────────────────────
+function forbid(res, status, reason) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(status).json({ error: status === 404 ? 'Not found' : 'Forbidden', reason });
+}
 
-function buildApp(manager) {
+function createApp(options = {}) {
+  const policy = options.policy || defaultPolicy();
+  const inner = options.manager || new McpManager({}, policy);
+  const manager = guardManager(inner, policy);
+  const openUpstream = options.openUpstream;
   const app = express();
 
-  app.use(cors());
-  app.use(express.json());
-
-  // ── Request logging middleware ─────────────────────────────────────────────
-  app.use((req, _res, next) => {
-    log(`${req.method} ${req.path}`);
-    next();
+  app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.locals.diag = {};
+    diagnostics.runWithRequest(res.locals.diag, () => {
+    res.on('finish', () => {
+      log(diagnostics.record({
+        method: req.method,
+        path: diagnostics.requestPath(req),
+        status: res.statusCode,
+        ...res.locals.diag,
+      }));
+    });
+    const decision = authorizeHttp(policy, req);
+    if (!decision.ok) return forbid(res, decision.status, decision.reason);
+    if (decision.route === 'mutation') return forbid(res, 403, 'forbidden_configuration');
+    if (decision.route === 'ollama-denied') return forbid(res, 403, 'forbidden_ollama');
+    if (decision.route === 'ollama-disabled') return forbid(res, 404, 'ollama_disabled');
+    if (decision.route === 'unknown') return forbid(res, 404, 'not_found');
+    if (decision.route === 'ollama') {
+      return proxyOllama(req, res, {
+        ...(openUpstream ? { openUpstream } : {}),
+        onDiagnostic(meta) { Object.assign(res.locals.diag, meta); },
+      });
+    }
+    return next();
+    });
   });
+  app.use(express.json({ limit: '256kb' }));
 
-  // ── GET /health ────────────────────────────────────────────────────────────
   app.get('/health', (_req, res) => {
     const servers = manager.getStatus();
-    const allOk = Object.values(servers).every((s) => s === 'connected');
+    const allOk = Object.values(servers).every((state) => state === 'connected');
     res.status(allOk ? 200 : 207).json({
       status: allOk ? 'ok' : 'degraded',
       servers,
     });
   });
 
-  // ── GET /tools ─────────────────────────────────────────────────────────────
   app.get('/tools', async (_req, res) => {
     try {
       const tools = await manager.getTools();
+      res.locals.diag.tools = tools.length;
+      res.locals.diag.tool_names = tools.map((tool) => tool.name);
       res.json({ tools });
     } catch (err) {
       logError('GET /tools failed', err);
-      res.status(500).json({ error: 'Failed to retrieve tools', detail: err.message });
+      res.status(500).json({ error: 'Failed to retrieve tools' });
     }
   });
 
-  // ── GET /tools/openai ──────────────────────────────────────────────────────
   app.get('/tools/openai', async (_req, res) => {
     try {
       const tools = await manager.getToolsOpenAI();
+      res.locals.diag.tools = tools.length;
+      res.locals.diag.tool_names = tools.map((tool) => tool.function && tool.function.name);
       res.json(tools);
     } catch (err) {
       logError('GET /tools/openai failed', err);
-      res.status(500).json({ error: 'Failed to retrieve OpenAI tools', detail: err.message });
+      res.status(500).json({ error: 'Failed to retrieve OpenAI tools' });
     }
   });
 
-  // ── POST /call ─────────────────────────────────────────────────────────────
   app.post('/call', async (req, res) => {
-    const { name, arguments: args } = req.body || {};
-
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Bad request', detail: 'JSON object required' });
+    }
+    const { name, arguments: args } = body;
+    if (typeof name === 'string') res.locals.diag.tool = name;
     if (!name || typeof name !== 'string') {
       return res.status(400).json({
         error: 'Bad request',
         detail: 'Body must include "name" (string) field',
       });
     }
-
+    if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
+      return res.status(400).json({ error: 'Bad request', detail: '"arguments" must be an object' });
+    }
     try {
       const result = await manager.callTool(name, args || {});
-      res.json(result);
+      return res.json(result);
     } catch (err) {
+      if (err.denied) {
+        return res.status(403).json({ error: 'Tool denied', isError: true });
+      }
       const statusCode = err.statusCode || 500;
-      logError(`POST /call "${name}" failed`, err);
-      res.status(statusCode).json({
-        error: err.message,
+      logError(`POST /call failed`, err);
+      return res.status(statusCode).json({
+        error: statusCode === 403 ? 'Tool denied' : 'Tool call failed',
         isError: true,
       });
     }
   });
 
-  // ── Custom tools CRUD ─────────────────────────────────────────────────────
-  const CUSTOM_TOOLS_PATH = path.join(__dirname, 'custom-tools.json');
-
-  function loadCustomTools() {
-    try {
-      if (fs.existsSync(CUSTOM_TOOLS_PATH)) {
-        return JSON.parse(fs.readFileSync(CUSTOM_TOOLS_PATH, 'utf8'));
-      }
-    } catch (e) {
-      logError('Failed to load custom tools', e);
-    }
-    return [];
-  }
-
-  function saveCustomTools(tools) {
-    fs.writeFileSync(CUSTOM_TOOLS_PATH, JSON.stringify(tools, null, 2), 'utf8');
-  }
-
-  app.get('/custom-tools', (_req, res) => {
-    res.json({ tools: loadCustomTools() });
-  });
-
-  app.post('/custom-tools', (req, res) => {
-    const { name, description, inputSchema, command } = req.body || {};
-    if (!name || typeof name !== 'string') {
-      return res.status(400).json({ error: 'Bad request', detail: '"name" (string) is required' });
-    }
-    if (!command || typeof command !== 'string') {
-      return res.status(400).json({ error: 'Bad request', detail: '"command" (string) is required' });
-    }
-    const tools = loadCustomTools();
-    const existing = tools.findIndex(t => t.name === name);
-    const tool = {
-      name,
-      description: description || '',
-      inputSchema: inputSchema || { type: 'object', properties: {} },
-      command,
-      server: 'custom',
-    };
-    if (existing >= 0) {
-      tools[existing] = tool;
-    } else {
-      tools.push(tool);
-    }
-    saveCustomTools(tools);
-    log(`Custom tool ${existing >= 0 ? 'updated' : 'added'}: ${name}`);
-    res.json({ ok: true, tool });
-  });
-
-  app.delete('/custom-tools/:name', (req, res) => {
-    const name = decodeURIComponent(req.params.name);
-    const tools = loadCustomTools();
-    const filtered = tools.filter(t => t.name !== name);
-    if (filtered.length === tools.length) {
-      return res.status(404).json({ error: 'Not found', detail: `No custom tool named "${name}"` });
-    }
-    saveCustomTools(filtered);
-    log(`Custom tool deleted: ${name}`);
-    res.json({ ok: true });
-  });
-
-  // ── GET/POST /config ───────────────────────────────────────────────────────
-  app.get('/config', (_req, res) => {
-    res.json({
-      braveSearchApiKey: getBraveKey(),
-    });
-  });
-
-  app.post('/config', (req, res) => {
-    const { braveSearchApiKey } = req.body || {};
-    let updated = [];
-    if (typeof braveSearchApiKey === 'string' && braveSearchApiKey) {
-      setBraveKey(braveSearchApiKey);
-      updated.push('braveSearchApiKey');
-    }
-    if (updated.length > 0) {
-      log(`Config updated: ${updated.join(', ')}`);
-      res.json({ success: true, updated });
-    } else {
-      res.status(400).json({ error: 'Bad request', detail: 'Body must include "braveSearchApiKey" (string)' });
-    }
-  });
-
-  // ── GET /sse ──────────────────────────────────────────────────────────────
-  // ── POST /messages ────────────────────────────────────────────────────────
   const sse = createSSEHandler(manager);
   app.get('/sse', sse.handleSSE);
   app.post('/messages', sse.handleMessages);
 
-  // ── POST /mcp — MCP Streamable HTTP transport (2025-03-26 / 2025-06-18) ──
   const streamable = createStreamableHandler(manager);
   app.post('/mcp', streamable.handlePost);
   app.get('/mcp', streamable.handleGet);
   app.delete('/mcp', streamable.handleDelete);
 
-  // ── 404 fallback ───────────────────────────────────────────────────────────
-  app.use((req, res) => {
-    res.status(404).json({
-      error: 'Not found',
-      availableEndpoints: ['GET /health', 'GET /sse', 'POST /messages', 'POST /mcp', 'GET /tools', 'GET /tools/openai', 'POST /call', 'GET /config', 'POST /config'],
-    });
-  });
-
-  // ── Global error handler ───────────────────────────────────────────────────
-  // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
+    if (err && (err.type === 'entity.parse.failed' || err.type === 'entity.too.large')) {
+      return res.status(400).json({ error: 'Bad request' });
+    }
     logError('Unhandled express error', err);
-    res.status(500).json({ error: 'Internal server error', detail: err.message });
+    return res.status(500).json({ error: 'Internal server error' });
   });
 
-  return app;
+  return { app, policy, manager, inner };
 }
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
+function listenHttp(app, options = {}) {
+  const host = assertLoopbackHost(options.host === undefined ? '127.0.0.1' : options.host);
+  const port = options.port === undefined ? 3100 : options.port;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new PolicyError('port must be an integer from 0 to 65535');
+  }
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host);
+    const onError = (err) => {
+      server.removeListener('listening', onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve(server);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+  });
+}
+
+function resolvePolicy(policyPath) {
+  if (fs.existsSync(policyPath)) return loadPolicyFile(policyPath);
+  if (process.env.BRIDGE_POLICY || process.argv.includes('--config')) {
+    throw new PolicyError(`Policy file not found: ${policyPath}`);
+  }
+  log(`No policy file at ${policyPath} — fail-closed defaults (no logins, Peekaboo disabled)`);
+  return defaultPolicy();
+}
 
 function setupShutdown(manager, server) {
   const shutdown = (signal) => {
-    log(`${signal} received — shutting down gracefully`);
+    log(`${signal} received — shutting down`);
     manager.stopAll();
-    server.close(() => {
-      log('HTTP server closed');
-      process.exit(0);
-    });
-    // Force exit after 5s if something hangs
+    server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5000).unref();
   };
-
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
 async function main() {
-  log('MCP-to-HTTP Bridge starting up');
-  log(`Config: ${CONFIG_PATH}`);
-  log(`Port:   ${PORT}`);
+  const cli = parseArgs();
+  const policyPath = cli.config || process.env.BRIDGE_POLICY || path.join(__dirname, 'bridge-policy.json');
+  log('MCP-to-HTTP bridge starting');
+  log(`Policy: ${policyPath}`);
 
-  const config = loadConfig(CONFIG_PATH);
-  const manager = new McpManager(config);
+  const policy = resolvePolicy(policyPath);
+  if (cli.port) policyStrictPort(policy, cli.port);
+  const host = assertLoopbackHost(cli.host || policy.bindHost);
+  const port = cli.port || policy.port;
 
-  log('Starting MCP servers...');
+  const { app, manager } = createApp({ policy });
   await manager.startAll();
 
-  const status = manager.getStatus();
-  for (const [name, s] of Object.entries(status)) {
-    log(`  ${name}: ${s}`);
-  }
-
-  const app = buildApp(manager);
-
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    log(`HTTP server listening on 0.0.0.0:${PORT}`);
-    log('Endpoints:');
-    log('  GET  /health       — server health');
-    log('  GET  /tools        — aggregated MCP tool list');
-    log('  GET  /tools/openai — OpenAI function-calling format');
-    log('  POST /call         — execute a tool call');
-  });
-
+  const server = await listenHttp(app, { host, port });
+  const bound = server.address();
+  log(`HTTP server listening on ${bound.address}:${bound.port}`);
+  log('Remote access is only via a private Tailscale Serve proxy to this loopback port.');
   setupShutdown(manager, server);
 }
 
-main().catch((err) => {
-  logError('Fatal startup error', err);
-  process.exit(1);
-});
+function policyStrictPort(policy, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new PolicyError('Refusing --port value');
+  }
+  return policy;
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    logError('Fatal startup error', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  createApp,
+  listenHttp,
+  guardManager,
+  resolvePolicy,
+  parseArgs,
+};
