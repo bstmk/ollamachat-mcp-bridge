@@ -24,6 +24,9 @@ const {
   defaultPolicy,
   loadPolicyFile,
   toolAllowed,
+  narrowedInputSchema,
+  prepareToolCall,
+  presentToolResult,
 } = require('./security-policy');
 const { proxyOllama } = require('./ollama-proxy');
 const diagnostics = require('./diagnostics');
@@ -58,7 +61,11 @@ function guardManager(inner, policy) {
     },
     async getTools() {
       const tools = await inner.getTools();
-      return tools.filter((tool) => tool && toolAllowed(policy, tool.name));
+      return tools.filter((tool) => tool && toolAllowed(policy, tool.name)).map((tool) => {
+        const bare = String(tool.name || '').split('__').pop();
+        const schema = narrowedInputSchema(bare);
+        return schema ? { ...tool, inputSchema: schema } : tool;
+      });
     },
     async getToolsOpenAI() {
       const tools = await this.getTools();
@@ -72,13 +79,21 @@ function guardManager(inner, policy) {
       }));
     },
     async callTool(name, args) {
-      if (!toolAllowed(policy, name)) {
-        const err = new Error('Tool denied');
-        err.statusCode = 403;
-        err.denied = true;
+      let prepared;
+      try {
+        prepared = prepareToolCall(policy, name, args || {});
+      } catch (err) {
+        diagnostics.noteToolAttempt({ tool: name, dispatched: 0, is_error: true });
         throw err;
       }
-      return inner.callTool(name, args);
+      const result = await inner.callTool(prepared.name, prepared.args);
+      const presented = presentToolResult(prepared.bare, result);
+      diagnostics.noteToolAttempt({
+        tool: prepared.name,
+        dispatched: 1,
+        is_error: Boolean(presented && presented.isError),
+      });
+      return presented;
     },
     startAll() {
       return inner.startAll();
@@ -104,6 +119,7 @@ function createApp(options = {}) {
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.locals.diag = {};
+    diagnostics.runWithRequest(res.locals.diag, () => {
     res.on('finish', () => {
       log(diagnostics.record({
         method: req.method,
@@ -125,6 +141,7 @@ function createApp(options = {}) {
       });
     }
     return next();
+    });
   });
   app.use(express.json({ limit: '256kb' }));
 

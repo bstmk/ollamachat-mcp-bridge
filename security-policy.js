@@ -30,6 +30,9 @@ const REQUIRED_ARGS = ['mcp'];
 /** Reviewed against Peekaboo source/docs for 4.9.x. Not executed on macOS. */
 const PEEKABOO_MINIMAL = Object.freeze(['permissions']);
 
+/** Screenshot, launch, click, and type. Not a blanket mutating-tool switch. */
+const PEEKABOO_GUI = Object.freeze(['image', 'app', 'click', 'type']);
+
 const PEEKABOO_SENSITIVE = Object.freeze([
   'list',
   'inspect_ui',
@@ -43,8 +46,6 @@ const PEEKABOO_MUTATING = Object.freeze([
   'analyze',
   'browser',
   'capture',
-  'click',
-  'type',
   'set_value',
   'select_text',
   'action',
@@ -69,8 +70,24 @@ const PEEKABOO_MUTATING = Object.freeze([
 
 const PEEKABOO_CATALOG = new Set([
   ...PEEKABOO_MINIMAL,
+  ...PEEKABOO_GUI,
   ...PEEKABOO_SENSITIVE,
   ...PEEKABOO_MUTATING,
+]);
+
+const BLOCKED_APP_NAMES = new Set([
+  'terminal',
+  'com.apple.terminal',
+  'iterm',
+  'iterm2',
+  'com.googlecode.iterm2',
+  'script editor',
+  'scripteditor',
+  'com.apple.scripteditor2',
+  'automator',
+  'com.apple.automator',
+  'shortcuts',
+  'com.apple.shortcuts',
 ]);
 
 const PROTOCOL_ROUTES = new Set([
@@ -95,6 +112,7 @@ const TOP_LEVEL_FIELDS = new Set([
   'requiredAppCapability',
   'identityMode',
   'allowSensitiveObservation',
+  'allowGuiControls',
   'allowMutatingTools',
   'ollamaProxy',
   'peekaboo',
@@ -112,6 +130,7 @@ class PolicyError extends Error {
 function classifyPeekabooTool(name) {
   const normalized = normalizeToolName(name);
   if (PEEKABOO_MINIMAL.includes(normalized)) return 'minimal';
+  if (PEEKABOO_GUI.includes(normalized)) return 'gui';
   if (PEEKABOO_SENSITIVE.includes(normalized)) return 'sensitive';
   if (PEEKABOO_MUTATING.includes(normalized)) return 'mutating';
   return 'unknown';
@@ -201,6 +220,11 @@ function validateToolList(tools, flags) {
         `Refusing unreviewed Peekaboo tool "${name}". Unknown tools stay denied.`
       );
     }
+    if (kind === 'gui' && !flags.allowGuiControls) {
+      throw new PolicyError(
+        `Refusing GUI control "${name}" while allowGuiControls is false`
+      );
+    }
     if (kind === 'sensitive' && !flags.allowSensitiveObservation) {
       throw new PolicyError(
         `Refusing sensitive Peekaboo tool "${name}" while allowSensitiveObservation is false`
@@ -279,6 +303,7 @@ function defaultPolicy() {
     requiredAppCapability: DEFAULT_CAPABILITY,
     identityMode: 'user',
     allowSensitiveObservation: false,
+    allowGuiControls: false,
     allowMutatingTools: false,
     ollamaProxy: false,
     peekaboo: {
@@ -317,6 +342,7 @@ function normalizePolicy(raw) {
     'allowSensitiveObservation',
     false
   );
+  const allowGuiControls = assertBoolean(raw.allowGuiControls, 'allowGuiControls', false);
   const allowMutatingTools = assertBoolean(raw.allowMutatingTools, 'allowMutatingTools', false);
   const ollamaProxy = assertBoolean(raw.ollamaProxy, 'ollamaProxy', false);
 
@@ -372,6 +398,7 @@ function normalizePolicy(raw) {
   const args = validateArgs(peekabooRaw.args === undefined ? ['mcp'] : peekabooRaw.args);
   const tools = validateToolList(peekabooRaw.tools === undefined ? [] : peekabooRaw.tools, {
     allowSensitiveObservation,
+    allowGuiControls,
     allowMutatingTools,
   });
 
@@ -385,6 +412,7 @@ function normalizePolicy(raw) {
     requiredAppCapability,
     identityMode,
     allowSensitiveObservation,
+    allowGuiControls,
     allowMutatingTools,
     ollamaProxy,
     peekaboo: Object.freeze({
@@ -615,6 +643,252 @@ function toolAllowed(policy, toolName) {
   return policy.peekaboo.tools.includes(parts.bare);
 }
 
+function denyTool() {
+  const err = new Error('Tool denied');
+  err.statusCode = 403;
+  err.denied = true;
+  return err;
+}
+
+function plainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function blockedAppTarget(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text || text.length > 200 || /[\r\n\0]/.test(text)) return true;
+  if (text.includes('://') || text.startsWith('pid:') || text.includes('/') || text.includes('\\')) return true;
+  const bare = text.replace(/\.app$/, '');
+  return BLOCKED_APP_NAMES.has(bare);
+}
+
+function narrowedInputSchema(bare) {
+  if (bare === 'image') {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        format: { type: 'string', const: 'data' },
+        app_target: { type: 'string' },
+        capture_focus: { type: 'string', enum: ['background', 'auto', 'foreground'] },
+        scale: { type: 'string', enum: ['logical', '1x', 'native', 'retina', '2x'] },
+        retina: { type: 'boolean' },
+      },
+    };
+  }
+  if (bare === 'app') {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['action'],
+      properties: {
+        action: { type: 'string', enum: ['launch'] },
+        name: { type: 'string' },
+        bundleId: { type: 'string' },
+        waitUntilReady: { type: 'boolean' },
+      },
+    };
+  }
+  if (bare === 'click') {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string' },
+        on: { type: 'string' },
+        coords: { type: 'string' },
+        snapshot: { type: 'string' },
+        wait_for: { type: 'number' },
+        double: { type: 'boolean' },
+        right: { type: 'boolean' },
+        background: { type: 'boolean' },
+        pid: { type: 'number' },
+      },
+    };
+  }
+  if (bare === 'type') {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['text'],
+      properties: {
+        text: { type: 'string' },
+        on: { type: 'string' },
+        snapshot: { type: 'string' },
+        delay: { type: 'number' },
+        profile: { type: 'string', enum: ['human', 'linear'] },
+        wpm: { type: 'number' },
+      },
+    };
+  }
+  if (bare === 'permissions') {
+    return { type: 'object', additionalProperties: false, properties: {} };
+  }
+  return null;
+}
+
+function shortString(value, max) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > max || /[\r\n\0]/.test(value)) return null;
+  return value;
+}
+
+function prepareToolCall(policy, toolName, args) {
+  const parts = splitToolName(toolName);
+  if (!parts || !toolAllowed(policy, toolName)) throw denyTool();
+  const input = args === undefined ? {} : args;
+  if (!plainObject(input)) throw denyTool();
+  const bare = parts.bare;
+  if (bare === 'permissions') {
+    if (Object.keys(input).length > 0) throw denyTool();
+    return { name: `peekaboo__${bare}`, bare, args: {} };
+  }
+  if (bare === 'image') {
+    const next = { format: 'data' };
+    if (input.app_target !== undefined) {
+      const target = shortString(input.app_target, 200);
+      if (!target) throw denyTool();
+      next.app_target = target;
+    }
+    if (input.capture_focus !== undefined) {
+      if (!['background', 'auto', 'foreground'].includes(input.capture_focus)) throw denyTool();
+      next.capture_focus = input.capture_focus;
+    }
+    if (input.scale !== undefined) {
+      if (!['logical', '1x', 'native', 'retina', '2x'].includes(input.scale)) throw denyTool();
+      next.scale = input.scale;
+    }
+    if (input.retina !== undefined) {
+      if (typeof input.retina !== 'boolean') throw denyTool();
+      next.retina = input.retina;
+    }
+    for (const key of Object.keys(input)) {
+      if (!['format', 'app_target', 'capture_focus', 'scale', 'retina'].includes(key)) throw denyTool();
+    }
+    if (input.format !== undefined && input.format !== 'data') throw denyTool();
+    return { name: `peekaboo__${bare}`, bare, args: next };
+  }
+  if (bare === 'app') {
+    if (input.action !== 'launch') throw denyTool();
+    const name = input.name === undefined ? null : shortString(input.name, 200);
+    const bundleId = input.bundleId === undefined ? null : shortString(input.bundleId, 200);
+    if (input.name !== undefined && !name) throw denyTool();
+    if (input.bundleId !== undefined && !bundleId) throw denyTool();
+    if (!name && !bundleId) throw denyTool();
+    if ((name && blockedAppTarget(name)) || (bundleId && blockedAppTarget(bundleId))) throw denyTool();
+    if (input.waitUntilReady !== undefined && typeof input.waitUntilReady !== 'boolean') throw denyTool();
+    for (const key of Object.keys(input)) {
+      if (!['action', 'name', 'bundleId', 'waitUntilReady'].includes(key)) throw denyTool();
+    }
+    const next = { action: 'launch' };
+    if (name) next.name = name;
+    if (bundleId) next.bundleId = bundleId;
+    if (input.waitUntilReady !== undefined) next.waitUntilReady = input.waitUntilReady;
+    return { name: `peekaboo__${bare}`, bare, args: next };
+  }
+  if (bare === 'click') {
+    const next = {};
+    if (input.query !== undefined) next.query = shortString(input.query, 200);
+    if (input.on !== undefined) next.on = shortString(input.on, 32);
+    if (input.coords !== undefined) next.coords = shortString(input.coords, 32);
+    if (input.snapshot !== undefined) next.snapshot = shortString(input.snapshot, 80);
+    if (input.query !== undefined && !next.query) throw denyTool();
+    if (input.on !== undefined && !next.on) throw denyTool();
+    if (input.coords !== undefined && (!next.coords || !/^[0-9]+(?:\.[0-9]+)?,[0-9]+(?:\.[0-9]+)?$/.test(next.coords))) {
+      throw denyTool();
+    }
+    if (input.snapshot !== undefined && !next.snapshot) throw denyTool();
+    if (!next.query && !next.on && !next.coords) throw denyTool();
+    if (input.wait_for !== undefined) {
+      if (typeof input.wait_for !== 'number' || input.wait_for < 0 || input.wait_for > 10000) throw denyTool();
+      next.wait_for = input.wait_for;
+    }
+    for (const key of ['double', 'right', 'background']) {
+      if (input[key] !== undefined) {
+        if (typeof input[key] !== 'boolean') throw denyTool();
+        next[key] = input[key];
+      }
+    }
+    if (input.pid !== undefined) {
+      if (!Number.isInteger(input.pid) || input.pid <= 0) throw denyTool();
+      next.pid = input.pid;
+    }
+    for (const key of Object.keys(input)) {
+      if (!['query', 'on', 'coords', 'snapshot', 'wait_for', 'double', 'right', 'background', 'pid'].includes(key)) {
+        throw denyTool();
+      }
+    }
+    return { name: `peekaboo__${bare}`, bare, args: next };
+  }
+  if (bare === 'type') {
+    const text = shortString(input.text, 4000);
+    if (!text || /[{}]/.test(text)) throw denyTool();
+    const next = { text };
+    if (input.on !== undefined) {
+      next.on = shortString(input.on, 32);
+      if (!next.on) throw denyTool();
+    }
+    if (input.snapshot !== undefined) {
+      next.snapshot = shortString(input.snapshot, 80);
+      if (!next.snapshot) throw denyTool();
+    }
+    if (input.delay !== undefined) {
+      if (typeof input.delay !== 'number' || input.delay < 0 || input.delay > 1000) throw denyTool();
+      next.delay = input.delay;
+    }
+    if (input.profile !== undefined) {
+      if (!['human', 'linear'].includes(input.profile)) throw denyTool();
+      next.profile = input.profile;
+    }
+    if (input.wpm !== undefined) {
+      if (typeof input.wpm !== 'number' || input.wpm < 80 || input.wpm > 220) throw denyTool();
+      next.wpm = input.wpm;
+    }
+    for (const key of Object.keys(input)) {
+      if (!['text', 'on', 'snapshot', 'delay', 'profile', 'wpm'].includes(key)) throw denyTool();
+    }
+    return { name: `peekaboo__${bare}`, bare, args: next };
+  }
+  throw denyTool();
+}
+
+function presentToolResult(bare, result) {
+  if (bare !== 'image' || !result || !Array.isArray(result.content)) return result;
+  const content = [];
+  for (const item of result.content) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'image' && typeof item.data === 'string' && item.data.length > 0 && item.data.length < 8_000_000) {
+      content.push({
+        type: 'image',
+        data: item.data,
+        mimeType: typeof item.mimeType === 'string' ? item.mimeType : 'image/png',
+      });
+      continue;
+    }
+    if (item.type === 'text' && typeof item.text === 'string') {
+      const dataUrl = item.text.trim().match(/^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i);
+      if (dataUrl) {
+        content.push({
+          type: 'image',
+          data: dataUrl[2].replace(/\s/g, ''),
+          mimeType: dataUrl[1].toLowerCase(),
+        });
+        continue;
+      }
+      const compact = item.text.replace(/\s/g, '');
+      if (compact.length > 256 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+        content.push({ type: 'image', data: compact, mimeType: 'image/png' });
+        continue;
+      }
+      if (/^\/\S+$/.test(item.text.trim())) {
+        content.push({ type: 'text', text: 'Screenshot captured.' });
+        continue;
+      }
+      content.push({ type: 'text', text: item.text.slice(0, 300) });
+    }
+  }
+  return { ...result, content };
+}
+
 function peekabooSpawnPlan(policy) {
   if (!policy.peekaboo.enabled || policy.peekaboo.tools.length === 0) return null;
   const allowed = new Set(policy.peekaboo.tools);
@@ -637,6 +911,7 @@ module.exports = {
   POLICY_VERSION,
   DEFAULT_CAPABILITY,
   PEEKABOO_MINIMAL,
+  PEEKABOO_GUI,
   PEEKABOO_SENSITIVE,
   PEEKABOO_MUTATING,
   PolicyError,
@@ -652,5 +927,8 @@ module.exports = {
   routeClass,
   authorizeHttp,
   toolAllowed,
+  narrowedInputSchema,
+  prepareToolCall,
+  presentToolResult,
   peekabooSpawnPlan,
 };

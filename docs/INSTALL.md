@@ -27,9 +27,9 @@ Leave these Funnel mappings untouched:
 On the Mac, outside any git checkout:
 
 ```bash
-shasum -a 256 -c ollamachat-mcp-bridge-2.0.5.tar.gz.sha256
-tar -xzf ollamachat-mcp-bridge-2.0.5.tar.gz
-cd ollamachat-mcp-bridge-2.0.5
+shasum -a 256 -c ollamachat-mcp-bridge-2.0.6.tar.gz.sha256
+tar -xzf ollamachat-mcp-bridge-2.0.6.tar.gz
+cd ollamachat-mcp-bridge-2.0.6
 npm ci --omit=dev
 npm test
 npm audit --omit=dev --audit-level=high
@@ -39,7 +39,7 @@ npm audit --omit=dev --audit-level=high
 
 `npm test` runs the automated tests that ship inside the archive. It must report a test count greater than 0. A report of 0 tests is a broken archive; `npm test` exits non-zero in that case. The tests use Node's built-in test runner and `express`, which is a runtime dependency. There is no separate test-only npm package and no fixture file to install. `npm ci --omit=dev` is enough. The tests do not launch Peekaboo or join a tailnet.
 
-`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.5. Each request writes one `[diag]` log line: method, path with no query string, status, and tool counts or names. It does not write prompts, message text, response bodies, or account headers. There is no remote diagnostics URL.
+`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.6. Each request writes one `[diag]` log line: method, path with no query string, status, and tool counts or names. It does not write prompts, message text, response bodies, or account headers. There is no remote diagnostics URL.
 
 ## 2. Write a local policy
 
@@ -181,7 +181,23 @@ Vanta’s published Ollama guide adds `/v1` to a base address that has no path. 
 - API key: leave blank. The bridge does not read or forward `Authorization`.
 - MCP server: `https://<magicdns-name>:38443/mcp`, transport HTTP, authentication none. Serve supplies the identity headers.
 
-The forwarded OpenAI routes are only `GET /v1/models` and `POST /v1/chat/completions`. Embeddings, files, completions, responses, and model create or delete stay refused. This has not been run inside Vanta.
+The forwarded OpenAI routes are only `GET /v1/models` and `POST /v1/chat/completions`. Embeddings, files, completions, responses, and model create or delete stay refused. This has not been run as a GUI test on the Mac.
+
+For the approved Vanta controls, edit only the local `bridge-policy.json`. Leave the login that is already there. Set:
+
+```json
+"allowGuiControls": true,
+"allowMutatingTools": false,
+"allowSensitiveObservation": false,
+"peekaboo": {
+  "enabled": true,
+  "command": "/opt/homebrew/bin/peekaboo",
+  "args": ["mcp"],
+  "tools": ["permissions", "image", "app", "click", "type"]
+}
+```
+
+`app` accepts only `action: "launch"`. Terminal, iTerm, Script Editor, Automator, and Shortcuts are refused. `type` accepts text and refuses return, delete, and brace key tokens. `image` is forced to inline `format: "data"`. Click and type can still press a delete or send control inside whatever app is open. That cannot be prevented by a general GUI tool. Do not enable `shell`, `see`, clipboard, or browser tools. Restart the bridge yourself after saving the file. A first check is Calculator: launch it, click a digit, and type a digit. Do not press Return in Notes or Mail.
 
 ## 6. Cleanup
 
@@ -200,7 +216,7 @@ Confirm 443 → 18104, 10000 → 18100, and 8443 → 18084 are still present and
 Delete the unpacked directory if you do not want the files:
 
 ```bash
-rm -rf /path/to/ollamachat-mcp-bridge-2.0.5
+rm -rf /path/to/ollamachat-mcp-bridge-2.0.6
 ```
 
 That does not remove Peekaboo, Ollama, Tailscale, or Screen Recording permission. Those were not installed by this package.

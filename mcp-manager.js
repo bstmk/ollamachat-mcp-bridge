@@ -727,10 +727,16 @@ class McpManager {
    * @returns {Promise<object>}    MCP tool result { content, isError }
    */
   async callTool(prefixedName, args) {
-    const { toolAllowed } = require('./security-policy');
-    if (!this._policy || !toolAllowed(this._policy, prefixedName)) {
-      throw toolDenied();
+    const { prepareToolCall } = require('./security-policy');
+    let prepared;
+    try {
+      prepared = prepareToolCall(this._policy, prefixedName, args || {});
+    } catch (err) {
+      throw err;
     }
+    prefixedName = prepared.name;
+    args = prepared.args;
+    const bareName = prepared.bare;
 
     const sepIdx = prefixedName.indexOf(SERVER_PREFIX_SEP);
     const serverName = sepIdx > 0 ? prefixedName.slice(0, sepIdx) : '';
@@ -743,7 +749,8 @@ class McpManager {
       err.statusCode = 503;
       throw err;
     }
-    return proc.callTool(toolName, args);
+    const { presentToolResult } = require('./security-policy');
+    return presentToolResult(bareName, await proc.callTool(toolName, args));
   }
 }
 

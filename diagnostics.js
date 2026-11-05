@@ -5,6 +5,9 @@
  * Counts and tool names only. No query string, body, prompt, or account header.
  */
 
+const { AsyncLocalStorage } = require('async_hooks');
+
+const requestStore = new AsyncLocalStorage();
 const recent = [];
 const MAX_RECENT = 200;
 
@@ -100,6 +103,8 @@ function format(entry) {
     parts.push(`names=${entry.tool_names.map(safeToken).filter(Boolean).join(',')}`);
   }
   if (entry.tool) parts.push(`tool=${safeToken(entry.tool)}`);
+  if (entry.dispatched !== undefined) parts.push(`dispatched=${entry.dispatched ? 1 : 0}`);
+  if (entry.is_error !== undefined) parts.push(`is_error=${entry.is_error ? 1 : 0}`);
   if (entry.request_tools !== undefined) parts.push(`request_tools=${safeToken(entry.request_tools)}`);
   if (Array.isArray(entry.request_tool_names) && entry.request_tool_names.length) {
     parts.push(`request_tool_names=${entry.request_tool_names.map(safeToken).filter(Boolean).join(',')}`);
@@ -126,6 +131,18 @@ function reset() {
   recent.length = 0;
 }
 
+function runWithRequest(diag, fn) {
+  return requestStore.run(diag, fn);
+}
+
+function noteToolAttempt(fields) {
+  const diag = requestStore.getStore();
+  if (!diag) return;
+  if (fields.tool) diag.tool = safeToken(fields.tool);
+  if (fields.dispatched !== undefined) diag.dispatched = fields.dispatched ? 1 : 0;
+  if (fields.is_error !== undefined) diag.is_error = fields.is_error ? 1 : 0;
+}
+
 module.exports = {
   safeToken,
   requestPath,
@@ -135,4 +152,6 @@ module.exports = {
   record,
   snapshot,
   reset,
+  runWithRequest,
+  noteToolAttempt,
 };

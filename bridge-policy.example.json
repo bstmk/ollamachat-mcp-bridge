@@ -8,6 +8,7 @@
   "requiredAppCapability": "example.com/cap/ollamachat-bridge",
   "identityMode": "user",
   "allowSensitiveObservation": false,
+  "allowGuiControls": false,
   "allowMutatingTools": false,
   "ollamaProxy": false,
   "peekaboo": {

@@ -209,7 +209,7 @@ test('policy fails closed on wildcard login, shell command, extra args, unknown 
   assert.throws(() => policy({ peekaboo: { command: '/tmp/bash' } }), /basename/);
   assert.throws(() => policy({ peekaboo: { command: '/opt/homebrew/bin/peekaboo/../../bin/bash' } }), /exact/);
   assert.throws(() => policy({ peekaboo: { args: ['mcp', '--extra'] } }), /args/);
-  assert.throws(() => policy({ peekaboo: { tools: ['click'] } }), /mutating/);
+  assert.throws(() => policy({ peekaboo: { tools: ['click'] } }), /allowGuiControls/);
   assert.throws(() => policy({ peekaboo: { tools: ['see'] } }), /sensitive/);
   assert.throws(() => policy({ peekaboo: { tools: ['shell'] } }), /mutating|unreviewed/);
   assert.throws(() => policy({ peekaboo: { tools: ['not_a_real_tool'] } }), /unreviewed/);
@@ -221,6 +221,7 @@ test('policy fails closed on wildcard login, shell command, extra args, unknown 
   const opted = policy({
     allowMutatingTools: true,
     allowSensitiveObservation: true,
+    allowGuiControls: true,
     peekaboo: { tools: ['permissions', 'see', 'click'] },
   });
   assert.equal(toolAllowed(opted, 'peekaboo__click'), true);

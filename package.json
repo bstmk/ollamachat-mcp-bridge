@@ -1,6 +1,6 @@
 {
   "name": "mcp-to-http-bridge",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "Loopback MCP-to-HTTP bridge for OllamaChat, gated by a Tailscale Serve identity and a fail-closed Peekaboo allowlist",
   "main": "server.js",
   "files": [
