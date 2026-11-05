@@ -49,17 +49,26 @@ function chatRequestTools(body) {
 function ndjsonToolCalls() {
   let pending = '';
   const names = [];
-  const takeLine = (line) => {
-    if (!line.includes('tool_calls')) return;
-    let obj;
-    try { obj = JSON.parse(line); } catch (_) { return; }
-    const calls = obj && obj.message && Array.isArray(obj.message.tool_calls)
-      ? obj.message.tool_calls
-      : (obj && Array.isArray(obj.tool_calls) ? obj.tool_calls : null);
-    if (!calls) return;
+  const collect = (calls) => {
+    if (!Array.isArray(calls)) return;
     for (const call of calls) {
       const name = safeToken(call && (call.function?.name || call.name));
       if (name) names.push(name);
+    }
+  };
+  const takeLine = (line) => {
+    let payload = String(line || '').trim();
+    if (payload.startsWith('data:')) payload = payload.slice(5).trim();
+    if (!payload || payload === '[DONE]' || !payload.includes('tool_calls')) return;
+    let obj;
+    try { obj = JSON.parse(payload); } catch (_) { return; }
+    collect(obj && obj.message && obj.message.tool_calls);
+    collect(obj && obj.tool_calls);
+    if (obj && Array.isArray(obj.choices)) {
+      for (const choice of obj.choices) {
+        collect(choice && choice.delta && choice.delta.tool_calls);
+        collect(choice && choice.message && choice.message.tool_calls);
+      }
     }
   };
   return {

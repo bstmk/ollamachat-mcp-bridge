@@ -43,9 +43,9 @@ Forwarded, and only these:
 - `POST /api/chat` (NDJSON stream unless the body says `"stream": false`)
 - `POST /api/generate` (same streaming shape)
 
-Refused without contacting Ollama: `/api/pull`, `/api/push`, `/api/create`, `/api/copy`, `/api/delete`, `/api/blobs/*`, `/api/embed`, `/api/embeddings`, `/api/ps`, `/v1/*`, any query string, and any path that contains `..`, `%`, or `//`. Chat and generate bodies are capped at 2 MiB. Identity and capability headers are not forwarded.
+Refused without contacting Ollama: `/api/pull`, `/api/push`, `/api/create`, `/api/copy`, `/api/delete`, `/api/blobs/*`, `/api/embed`, `/api/embeddings`, `/api/ps`, `/v1/embeddings`, `/v1/completions`, `/v1/responses`, `/v1/files`, and any other `/v1` path, plus any query string or a path that contains `..`, `%`, or `//`. `GET /v1/models` and `POST /v1/chat/completions` are forwarded only when `ollamaProxy` is true, for clients that add `/v1` themselves. Chat bodies are capped at 2 MiB. Identity and capability headers are not forwarded.
 
-This assumes the app uses Ollama's native routes. If it uses `/v1/chat/completions` or `/api/ps`, those calls fail until the app is captured and the allowlist is changed on purpose. The real iOS app has not been run against this proxy.
+`/api/ps` and every `/v1` route other than `GET /v1/models` and `POST /v1/chat/completions` stay refused. The OllamaChat iPhone app has not been run against this proxy.
 
 ## Discovery contract that is public
 

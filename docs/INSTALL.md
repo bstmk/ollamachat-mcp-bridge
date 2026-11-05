@@ -27,9 +27,9 @@ Leave these Funnel mappings untouched:
 On the Mac, outside any git checkout:
 
 ```bash
-shasum -a 256 -c ollamachat-mcp-bridge-2.0.4.tar.gz.sha256
-tar -xzf ollamachat-mcp-bridge-2.0.4.tar.gz
-cd ollamachat-mcp-bridge-2.0.4
+shasum -a 256 -c ollamachat-mcp-bridge-2.0.5.tar.gz.sha256
+tar -xzf ollamachat-mcp-bridge-2.0.5.tar.gz
+cd ollamachat-mcp-bridge-2.0.5
 npm ci --omit=dev
 npm test
 npm audit --omit=dev --audit-level=high
@@ -39,7 +39,7 @@ npm audit --omit=dev --audit-level=high
 
 `npm test` runs the automated tests that ship inside the archive. It must report a test count greater than 0. A report of 0 tests is a broken archive; `npm test` exits non-zero in that case. The tests use Node's built-in test runner and `express`, which is a runtime dependency. There is no separate test-only npm package and no fixture file to install. `npm ci --omit=dev` is enough. The tests do not launch Peekaboo or join a tailnet.
 
-`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.4. Each request writes one `[diag]` log line: method, path with no query string, status, and tool counts or names. It does not write prompts, message text, response bodies, or account headers. There is no remote diagnostics URL.
+`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.5. Each request writes one `[diag]` log line: method, path with no query string, status, and tool counts or names. It does not write prompts, message text, response bodies, or account headers. There is no remote diagnostics URL.
 
 ## 2. Write a local policy
 
@@ -175,6 +175,14 @@ Ollama on the Mac stays at `127.0.0.1:11434`. The phone does not get a second po
 
 `GET /tools` should list only `peekaboo__permissions`. Do not enable screenshot or mutating Peekaboo tools until a later supervised change. `gemma4:12b` can emit tool calls and is unreliable at Mac GUI tasks.
 
+Vanta’s published Ollama guide adds `/v1` to a base address that has no path. For that client, with `ollamaProxy` true:
+
+- Provider address: `https://<magicdns-name>:38443`
+- API key: leave blank. The bridge does not read or forward `Authorization`.
+- MCP server: `https://<magicdns-name>:38443/mcp`, transport HTTP, authentication none. Serve supplies the identity headers.
+
+The forwarded OpenAI routes are only `GET /v1/models` and `POST /v1/chat/completions`. Embeddings, files, completions, responses, and model create or delete stay refused. This has not been run inside Vanta.
+
 ## 6. Cleanup
 
 Stop the Node process you started (Ctrl-C in that terminal). Nothing in this package registered itself to start on login.
@@ -192,7 +200,7 @@ Confirm 443 → 18104, 10000 → 18100, and 8443 → 18084 are still present and
 Delete the unpacked directory if you do not want the files:
 
 ```bash
-rm -rf /path/to/ollamachat-mcp-bridge-2.0.4
+rm -rf /path/to/ollamachat-mcp-bridge-2.0.5
 ```
 
 That does not remove Peekaboo, Ollama, Tailscale, or Screen Recording permission. Those were not installed by this package.

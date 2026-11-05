@@ -178,6 +178,9 @@ test('disabled proxy and denied Ollama routes never open the upstream', async ()
       ['GET', '/api/%2e%2e/pull'],
       ['GET', '/api/tags?stream=1'],
       ['POST', '/api/generate'],
+      ['GET', '/v1/models'],
+      ['POST', '/v1/chat/completions'],
+      ['POST', '/v1/embeddings'],
     ];
     await withBridge(false, mock.openUpstream, async (port) => {
       for (const [method, path] of denied) {
@@ -193,8 +196,23 @@ test('disabled proxy and denied Ollama routes never open the upstream', async ()
       }
     });
     await withBridge(true, mock.openUpstream, async (port) => {
-      for (const path of ['/api/pull', '/api/push', '/api/create', '/api/copy', '/api/delete', '/api/blobs/sha256:abc', '/api/embed', '/api/ps', '/v1/chat/completions']) {
-        const method = path === '/api/delete' ? 'DELETE' : path === '/api/ps' ? 'GET' : 'POST';
+      for (const [method, path] of [
+        ['POST', '/api/pull'],
+        ['POST', '/api/push'],
+        ['POST', '/api/create'],
+        ['POST', '/api/copy'],
+        ['DELETE', '/api/delete'],
+        ['POST', '/api/blobs/sha256:abc'],
+        ['POST', '/api/embed'],
+        ['GET', '/api/ps'],
+        ['POST', '/v1/embeddings'],
+        ['POST', '/v1/completions'],
+        ['POST', '/v1/responses'],
+        ['POST', '/v1/files'],
+        ['GET', '/v1/files'],
+        ['GET', '/v1/models/gemma4:12b'],
+        ['DELETE', '/v1/models/gemma4:12b'],
+      ]) {
         const response = await request({
           port,
           method,
@@ -202,13 +220,8 @@ test('disabled proxy and denied Ollama routes never open the upstream', async ()
           headers: trusted(),
           body: method === 'GET' ? undefined : { model: 'gemma4:12b' },
         });
-        if (path.startsWith('/v1')) {
-          assert.equal(response.status, 404, path);
-          assert.equal(response.json.reason, 'not_found');
-        } else {
-          assert.equal(response.status, 403, path);
-          assert.equal(response.json.reason, 'forbidden_ollama');
-        }
+        assert.equal(response.status, 403, path);
+        assert.equal(response.json.reason, 'forbidden_ollama');
       }
       const bypasses = ['/api/tags/../pull', '/api/%2e%2e/pull', '/api/tags?x=1', '/api//chat'];
       for (const path of bypasses) {

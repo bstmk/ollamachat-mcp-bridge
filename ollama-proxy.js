@@ -24,6 +24,8 @@ const ALLOWED = Object.freeze({
   'POST /api/show': Object.freeze({ body: true, maxBytes: SHOW_MAX_BYTES, headerTimeoutMs: 15_000, idleTimeoutMs: 30_000 }),
   'POST /api/chat': Object.freeze({ body: true, maxBytes: CHAT_MAX_BYTES, headerTimeoutMs: 15_000, idleTimeoutMs: 120_000 }),
   'POST /api/generate': Object.freeze({ body: true, maxBytes: CHAT_MAX_BYTES, headerTimeoutMs: 15_000, idleTimeoutMs: 120_000 }),
+  'GET /v1/models': Object.freeze({ body: false, maxBytes: 0, headerTimeoutMs: 10_000, idleTimeoutMs: 15_000 }),
+  'POST /v1/chat/completions': Object.freeze({ body: true, maxBytes: CHAT_MAX_BYTES, headerTimeoutMs: 15_000, idleTimeoutMs: 120_000, sse: true }),
 });
 
 const HOP_AND_IDENTITY = new Set([
@@ -106,7 +108,10 @@ function canonicalOllamaPath(expressPath) {
 function classifyOllamaRoute(method, expressPath, rawUrl, proxyEnabled) {
   const pathValue = canonicalOllamaPath(expressPath);
   const raw = String(rawUrl || '');
-  const looksLikeApi = pathValue.toLowerCase().startsWith('/api') || raw.toLowerCase().includes('/api');
+  const lowerPath = pathValue.toLowerCase();
+  const lowerRaw = raw.toLowerCase();
+  const looksLikeApi = lowerPath.startsWith('/api') || lowerPath.startsWith('/v1')
+    || lowerRaw.includes('/api') || lowerRaw.includes('/v1');
   if (!looksLikeApi) return null;
   if (isSuspiciousOllamaUrl(rawUrl) || isSuspiciousOllamaUrl(pathValue)) return 'ollama-denied';
   const key = `${String(method || '').toUpperCase()} ${pathValue}`;
@@ -117,7 +122,10 @@ function classifyOllamaRoute(method, expressPath, rawUrl, proxyEnabled) {
 }
 
 function upstreamRequestHeaders(req, limits) {
-  const headers = { host: `${UPSTREAM_HOST}:${UPSTREAM_PORT}`, accept: 'application/json, application/x-ndjson' };
+  const headers = {
+    host: `${UPSTREAM_HOST}:${UPSTREAM_PORT}`,
+    accept: limits.sse ? 'text/event-stream, application/json' : 'application/json, application/x-ndjson',
+  };
   const contentType = req.headers['content-type'];
   if (limits.body) {
     if (typeof contentType !== 'string' || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType.trim())) {
@@ -135,7 +143,7 @@ function upstreamRequestHeaders(req, limits) {
 function safeResponseContentType(value) {
   if (typeof value !== 'string') return 'application/json';
   const type = value.split(';')[0].trim().toLowerCase();
-  if (type === 'application/json' || type === 'application/x-ndjson') return type;
+  if (type === 'application/json' || type === 'application/x-ndjson' || type === 'text/event-stream') return type;
   return 'application/octet-stream';
 }
 
@@ -188,8 +196,9 @@ function proxyOllama(req, res, deps) {
   }
 
   const startUpstream = (body) => {
-    const responseTools = pathValue === '/api/chat' ? ndjsonToolCalls() : null;
-    if (pathValue === '/api/chat' && typeof deps.onDiagnostic === 'function') {
+    const observeTools = pathValue === '/api/chat' || pathValue === '/v1/chat/completions';
+    const responseTools = observeTools ? ndjsonToolCalls() : null;
+    if (observeTools && typeof deps.onDiagnostic === 'function') {
       deps.onDiagnostic(chatRequestTools(body));
     }
     if (limits.body) headers['content-length'] = String(body.length);
