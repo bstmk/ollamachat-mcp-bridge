@@ -27,14 +27,16 @@ Leave these Funnel mappings untouched:
 On the Mac, outside any git checkout:
 
 ```bash
-shasum -a 256 -c ollamachat-mcp-bridge-2.0.0.tar.gz.sha256
-tar -xzf ollamachat-mcp-bridge-2.0.0.tar.gz
-cd ollamachat-mcp-bridge-2.0.0
+shasum -a 256 -c ollamachat-mcp-bridge-2.0.1.tar.gz.sha256
+tar -xzf ollamachat-mcp-bridge-2.0.1.tar.gz
+cd ollamachat-mcp-bridge-2.0.1
 npm ci --omit=dev
 npm test
 ```
 
-`npm test` checks the gate with mocks. It does not launch Peekaboo or join a tailnet.
+`npm test` runs the automated tests that ship inside the archive. It must report a test count greater than 0. A report of 0 tests is a broken archive; `npm test` exits non-zero in that case. The tests use Node's built-in test runner and `express`, which is a runtime dependency. There is no separate test-only npm package and no fixture file to install. `npm ci --omit=dev` is enough. The tests do not launch Peekaboo or join a tailnet.
+
+`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.1.
 
 ## 2. Write a local policy
 
@@ -91,7 +93,7 @@ tailscale funnel status
 
 Save that output. After the next command, those Funnel lines must be the same.
 
-Serve must be Tailscale **1.92 or newer** so `--accept-app-caps` exists. Older Serve never sends `Tailscale-App-Capabilities`, and the bridge then denies every request.
+`--accept-app-caps` exists in Tailscale 1.92 and later. Tailscale 1.104.4 on this Mac includes it. This repository did not run Serve.
 
 ```bash
 tailscale serve --bg \
@@ -113,43 +115,53 @@ tailscale funnel status
 
 You want a new private HTTPS 38443 entry and the same Funnel 443 / 10000 / 8443 mappings as before. If any Funnel line changed, stop and restore from the output you saved. Do not improvise with `tailscale serve reset`.
 
-## 4. Restrict the capability to one device
+## 4. Review the tailnet policy before any grant
 
-Tailnet membership is not a per-device allowlist. `Tailscale-User-Login` is the user. Serve does not send a node id. The per-device control is the **grant `src`** that decides whether this capability is attached.
+Do not append a grant and do not replace the live policy. Grants and ACLs are a union: a narrower rule does not remove a broader one. Read the current policy in the admin console first. Look for every `src` that can reach the Mac, every `ip` of `*`, `443`, `8443`, `10000`, `38443`, `18104`, `18100`, or `18084`, and every `app` value. Anything that already grants this capability, or that grants network access to the Mac for a user, group, `autogroup:member`, or `*`, still applies after you add a phone rule.
 
-Add a grant yourself in the tailnet policy. This repo cannot edit that policy. Do not grant the capability to a user, a group, `autogroup:member`, or `*`. Those selectors cover every matching device, and they all share one login.
+`Tailscale-User-Login` is the user. Every device that user owns presents the same login. Serve does not send a node id. A user, group, `autogroup:self`, or `*` in `src` is not one phone.
 
-Prefer one device, by its Tailscale IP or a host alias:
+An IP address or host alias in `src` is not a verified per-phone control. Tailscale's grant reference allows those selectors, and [tailscale/tailscale#15097](https://github.com/tailscale/tailscale/issues/15097) is still open: reporters find that IP and host-alias sources do not match, including for grants. This tailnet was not tested. Do not put the phone's Tailscale IP in `src` and treat the capability as device-limited.
+
+The selector the grant syntax actually uses for one device identity is a tag. Tag only the phone. Do not tag the Mac. A tag replaces that device's user identity for every existing grant, which can drop the Studio out of rules that still protect Funnel and the other listeners.
+
+This is a review snippet, with placeholders, in the shape from the [grants reference](https://tailscale.com/docs/reference/syntax/grants) (source tag, destination host alias, `ip` and `app` together). It is not an instruction to save it.
 
 ```json
 {
+  "tagOwners": {
+    "tag:ollamachat-phone": ["autogroup:admin"]
+  },
   "hosts": {
-    "ollamachat-iphone": "100.64.0.2",
     "ollamachat-mac": "100.64.0.3"
   },
   "grants": [
     {
-      "src": ["ollamachat-iphone"],
+      "src": ["tag:ollamachat-phone"],
       "dst": ["ollamachat-mac"],
       "ip": ["tcp:38443"],
       "app": {
-        "example.com/cap/ollamachat-bridge": [{ "role": "caller" }]
+        "example.com/cap/ollamachat-bridge": [
+          { "role": "caller" }
+        ]
       }
     }
   ]
 }
 ```
 
-`100.64.0.2` and `100.64.0.3` are placeholders in the Tailscale CGNAT range, not this Mac or this phone. Grants are a union: if any other grant gives the same capability to a wider `src`, that wider grant wins. Search the whole policy for `example.com/cap/ollamachat-bridge` before saving.
+`100.64.0.3` is a documentation address in the Tailscale CGNAT range, not this Mac. `ollamachat-mac` is the bare name from `hosts`, which is the grant reference's host-alias form. `tag:ollamachat-phone` matches only devices that carry that tag.
 
-There is an open Tailscale report that IP and host-alias `src` selectors sometimes fail to match ([tailscale/tailscale#15097](https://github.com/tailscale/tailscale/issues/15097)). If your iPhone is denied when it should match, do not "fix" it by switching `src` to your user. Use a tag that exists on that one device and set the bridge to tagged mode:
+A tagged phone does not receive `Tailscale-User-Login`. The local bridge policy for that setup is:
 
 ```json
 "identityMode": "tagged",
 "allowedLogins": []
 ```
 
-Tagged nodes do not receive `Tailscale-User-Login`. Tagged mode allows a request only when the login header is absent, the Funnel header is absent, and the capability array is present. An untagged laptop still gets a login header from Serve, so it stays denied. Tagging a device is an ACL change you make yourself.
+Tagged mode allows a request only when the login header is absent, the Funnel header is absent, and the capability array is present. An untagged laptop still gets a login header from Serve, so it stays denied even if some other grant also hands it the capability. Tagging is an ACL change you make yourself. No tag was applied from this package.
+
+Until that review is done, leave Serve unconfigured. Tailscale 1.104.4 can send the capability header; the phone grant is not in place.
 
 ## 5. Start the bridge and check denials
 
@@ -167,7 +179,7 @@ Expect HTTP 403 and `forbidden_identity`. Expect no `Access-Control-Allow-Origin
 
 From another tailnet device that is not the granted phone, open `https://<magicdns>:38443/health`. Expect a Tailscale ACL denial, or HTTP 403 from the bridge if the packet was proxied without the capability. A 200 from that second device means the grant is not limited to one device.
 
-From the phone's browser or a tailnet-aware client, the same URL should return 200 only after the policy login and capability match. Then set OllamaChat:
+The iPhone app has not been run against this bridge. What the public guide says it sends, and what is still unknown, is in [OLLAMACHAT-CLIENT.md](OLLAMACHAT-CLIENT.md). The LAN example in that guide uses the bridge origin with no path prefix:
 
 - Ollama URL: your existing local or tailnet Ollama URL. This package does not change Ollama or the Funnel ports in front of it.
 - MCP Bridge URL: `https://<magicdns-name>:38443`
@@ -193,7 +205,7 @@ Confirm 443 → 18104, 10000 → 18100, and 8443 → 18084 are still present and
 Delete the unpacked directory if you do not want the files:
 
 ```bash
-rm -rf /path/to/ollamachat-mcp-bridge-2.0.0
+rm -rf /path/to/ollamachat-mcp-bridge-2.0.1
 ```
 
 That does not remove Peekaboo, Ollama, Tailscale, or Screen Recording permission. Those were not installed by this package.

@@ -161,6 +161,16 @@ const MUTATION_PATHS = [
   ['DELETE', '/custom-tools/music_play'],
 ];
 
+test('runtime package ships tests and has no test-only npm dependency', () => {
+  const pkg = require('../package.json');
+  assert.equal(pkg.scripts.test, 'node scripts/run-tests.js');
+  assert.equal(pkg.devDependencies, undefined);
+  assert.equal(pkg.files.includes('test'), true);
+  assert.equal(pkg.files.includes('scripts/run-tests.js'), true);
+  assert.equal(fs.existsSync(path.join(__dirname, 'bridge.test.js')), true);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'scripts', 'run-tests.js')), true);
+});
+
 test('default bind is loopback and non-loopback hosts are refused', () => {
   assert.equal(assertLoopbackHost(undefined), '127.0.0.1');
   assert.equal(assertLoopbackHost('127.0.0.1'), '127.0.0.1');

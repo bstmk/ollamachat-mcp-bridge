@@ -12,6 +12,7 @@ This is not a claim that a passing test suite makes a Mac deployment safe. Read 
 - `security-policy.js` — bind, identity, and tool policy
 - `bridge-policy.example.json` — fail-closed placeholders, no personal hosts or logins
 - `docs/INSTALL.md` — install, Serve, cleanup
+- `docs/OLLAMACHAT-CLIENT.md` — what the public iOS guide says, and what is still untested
 - `docs/PEEKABOO-ALLOWLIST.md` — Peekaboo 4.9.7 tool review
 - `docs/THREAT-MODEL.md` — what the gate does and what it does not
 
@@ -24,5 +25,7 @@ npm ci
 npm test
 node server.js
 ```
+
+`npm test` runs the files in `test/` and exits non-zero when that count is 0. Those files are part of the release archive. There is no test-only npm dependency.
 
 With no `bridge-policy.json`, the process still listens on `127.0.0.1:3100` and denies every request.

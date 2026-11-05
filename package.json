@@ -1,11 +1,32 @@
 {
   "name": "mcp-to-http-bridge",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Loopback MCP-to-HTTP bridge for OllamaChat, gated by a Tailscale Serve identity and a fail-closed Peekaboo allowlist",
   "main": "server.js",
+  "files": [
+    "server.js",
+    "security-policy.js",
+    "mcp-manager.js",
+    "mcp-process.js",
+    "sse-handler.js",
+    "streamable-handler.js",
+    "ollama-tool-chat.js",
+    "bridge-policy.example.json",
+    "custom-tools.json",
+    "mcp-config.example.json",
+    "README.md",
+    "start.sh",
+    "start-all.sh",
+    "calendar-events.sh",
+    "verse-of-the-day.sh",
+    "docs",
+    "scripts/run-tests.js",
+    "scripts/pack-release.sh",
+    "test"
+  ],
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node scripts/run-tests.js"
   },
   "dependencies": {
     "express": "^4.18.2"

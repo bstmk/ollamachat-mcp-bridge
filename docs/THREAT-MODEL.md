@@ -95,6 +95,10 @@ These remain true if every test in this repo passes.
 | `POST /config`, `/custom-tools`, or a JSON-RPC config method | 403 or method-not-found. No `.env` write and no shell. |
 | Tool name not on the allowlist | Not dispatched. |
 
+## Loopback checks on the Mac
+
+A later manual check from the Mac, against `127.0.0.1`, reported success for: bind address `127.0.0.1`; denial of a missing identity, a wrong identity, a Funnel header, a foreign Origin, `/config`, `/custom-tools`, and `see`; and HTTP 200 for discovery and a call of the `permissions` tool. The login used in that check was the placeholder `local-test@example.invalid`. That string is not a tailnet identity, it is not in `bridge-policy.example.json`, and it was not committed. The server was stopped afterward and port 3100 was closed. No Tailscale command was run. Those checks are not the iPhone client and not Serve. See [OLLAMACHAT-CLIENT.md](OLLAMACHAT-CLIENT.md).
+
 ## Out of scope
 
-End-to-end iPhone → Serve → Peekaboo → GUI was not run. Ollama 0.40.13, the M5 Max, and `gemma4:12b` were not present in the build environment. No tailnet, ACL, or Funnel command was executed.
+End-to-end iPhone → Serve → Peekaboo → GUI was not run. Ollama 0.40.13, the M5 Max, and `gemma4:12b` were not present in the build environment. No tailnet, ACL, or Funnel command was executed. Tailscale 1.104.4 is new enough for `--accept-app-caps`; that flag was not invoked.
