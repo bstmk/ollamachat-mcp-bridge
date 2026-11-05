@@ -25,6 +25,7 @@ const {
   loadPolicyFile,
   toolAllowed,
 } = require('./security-policy');
+const { proxyOllama } = require('./ollama-proxy');
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -96,6 +97,7 @@ function createApp(options = {}) {
   const policy = options.policy || defaultPolicy();
   const inner = options.manager || new McpManager({}, policy);
   const manager = guardManager(inner, policy);
+  const openUpstream = options.openUpstream;
   const app = express();
 
   app.disable('x-powered-by');
@@ -103,7 +105,12 @@ function createApp(options = {}) {
     const decision = authorizeHttp(policy, req);
     if (!decision.ok) return forbid(res, decision.status, decision.reason);
     if (decision.route === 'mutation') return forbid(res, 403, 'forbidden_configuration');
+    if (decision.route === 'ollama-denied') return forbid(res, 403, 'forbidden_ollama');
+    if (decision.route === 'ollama-disabled') return forbid(res, 404, 'ollama_disabled');
     if (decision.route === 'unknown') return forbid(res, 404, 'not_found');
+    if (decision.route === 'ollama') {
+      return proxyOllama(req, res, openUpstream ? { openUpstream } : {});
+    }
     return next();
   });
   app.use(express.json({ limit: '256kb' }));

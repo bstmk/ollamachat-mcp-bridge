@@ -2,7 +2,7 @@
 
 Loopback HTTP bridge for the [OllamaChat MCP guide](https://sg1-labs.us/ollamachat/mcp/). The iPhone app sends a base URL and calls `GET /health`, `GET /tools`, and `POST /call`. This fork also keeps the existing SSE (`/sse`, `/messages`) and Streamable HTTP (`/mcp`) transports. Every one of those paths uses the same gate.
 
-The process binds to **127.0.0.1** only. A private Tailscale Serve listener on an unused port is the remote path. The app has URL fields and is not assumed to send a bearer token. Serve adds identity headers. An empty allowlist denies every caller and every tool.
+The process binds to **127.0.0.1** only. One private Tailscale Serve port is the remote path for both the Ollama API and the MCP bridge. The app has URL fields and is not assumed to send a bearer token. Serve adds identity headers. An empty allowlist denies every caller. `ollamaProxy` defaults to false and, when enabled, dials only `127.0.0.1:11434`.
 
 This is not a claim that a passing test suite makes a Mac deployment safe. Read [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) before enabling any Peekaboo tool.
 

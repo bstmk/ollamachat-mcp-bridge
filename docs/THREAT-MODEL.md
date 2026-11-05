@@ -73,12 +73,13 @@ These remain true if every test in this repo passes.
 4. **Mutating tools are the user.** Click, type, menus, paste, and `agent` run as the GUI user. Peekaboo's own hardening does not put a second person in the loop for this HTTP bridge.
 5. **Peekaboo was not executed here.** The catalog may not match `/opt/homebrew/bin/peekaboo` 4.9.7 on the Studio. The child may ignore `PEEKABOO_ALLOW_TOOLS`. The bridge still refuses names it did not allow, but a tool it did allow is really invoked, and this environment never watched that happen. Screen Recording and Accessibility prompts are outside this process.
 6. **The child inherits the parent environment**, minus `BRAVE_SEARCH_API_KEY`, `OSAURUS_ACCESS_KEY`, and `BRAVE_API_KEY`. Other variables in the Node process are visible to Peekaboo. That was not tested on macOS.
-7. **Tailscale ACL behavior was not tested.** IP or host-alias `src` may fail to match on some tailnets. A failed match fails closed only if you do not widen the grant. This repo did not apply a policy or open a tailnet.
-8. **Shared nodes and shares.** A node you share can reach Serve if the ACL allows it. Identity headers are filled for that visitor. They pass only if their login is listed and the capability grant includes them. Do not list them.
-9. **Funnel on the same port replaces Serve.** The last command for a port wins, and Funnel is public. Funnel traffic has no user identity. The bridge denies a request that still carries `Tailscale-Funnel-Request`, but the right control is to never publish 38443 with Funnel and never reuse 443, 8443, or 10000.
-10. **Host allowlisting is not TLS.** TLS ends at tailscaled. A wrong `allowedHosts` entry of your real MagicDNS name is required for the phone, and an extra name you add is accepted from any local client that passed the identity check.
-11. **The previous public git history** still contains older personal paths and the old unauthenticated routes. This change removes them from the tree. It does not rewrite history.
-12. **Ollama is a separate service.** A model that can be prompted can ask the app to call the bridge. Binding Ollama to `0.0.0.0` is out of scope and `start-all.sh` no longer does that. The existing Funnel in front of other local ports is unchanged by these files and is not reviewed here.
+7. **Tailscale ACL behavior was not tested.** The approved scope is every device signed into the operator's own Tailscale account, with no tag. A user selector does that. An IP `src` is not assumed to enforce it ([tailscale/tailscale#15097](https://github.com/tailscale/tailscale/issues/15097) is open). The live policy was not changed. A broader existing grant still applies because grants are a union.
+8. **The Ollama proxy is opt-in and fixed.** It dials only `127.0.0.1:11434`, and only for version, tags, show, chat, and generate. Pull, push, create, copy, delete, and blob routes are refused before that dial. A redirect from Ollama is not followed. Identity headers are not forwarded. Default `ollamaProxy` is false. The real iOS client has not been observed using these paths.
+9. **Shared nodes and shares.** A node you share can reach Serve if the ACL allows it. Identity headers are filled for that visitor. They pass only if their login is listed and the capability grant includes them. Do not list them.
+10. **Funnel on the same port replaces Serve.** The last command for a port wins, and Funnel is public. Funnel traffic has no user identity. The bridge denies a request that still carries `Tailscale-Funnel-Request`, but the right control is to never publish 38443 with Funnel and never reuse 443, 8443, or 10000.
+11. **Host allowlisting is not TLS.** TLS ends at tailscaled. A wrong `allowedHosts` entry of your real MagicDNS name is required for the phone, and an extra name you add is accepted from any local client that passed the identity check.
+12. **The previous public git history** still contains older personal paths and the old unauthenticated routes. This change removes them from the tree. It does not rewrite history.
+13. **Ollama stays on loopback.** The proxy does not rebind Ollama and does not open a second port. `start-all.sh` does not publish `0.0.0.0`. Model download routes are not forwarded. The existing Funnel listeners are unchanged by these files.
 
 ## Rejected clients
 
@@ -87,8 +88,8 @@ These remain true if every test in this repo passes.
 | LAN or public client hitting the Mac's IP | No listener. The socket is loopback. |
 | Tailnet client bypassing Serve and hitting a published bridge port | There is no published bridge port. Serve is the only forward. |
 | Funnel request, including one with forged login headers | `forbidden_funnel` when the Funnel header is present. Missing capability or login also denies. |
-| Same user, other device, grant `src` is only the phone | Serve does not attach the capability. `forbidden_identity`. |
-| Same user, grant `src` is the user | **Allowed.** That is not per-device. Do not write that grant. |
+| Another Tailscale account | Login is not on the allowlist. `forbidden_identity`. |
+| Another device signed into the approved account | In scope. The login matches and, once the grant `src` is that user, Serve attaches the capability. This is not a per-phone limit. |
 | Tagged phone, `identityMode` still `user` | Login header is absent. Denied. |
 | Untagged device, `identityMode` `tagged` | Login header is present. Denied. |
 | Request with `Origin` or a foreign `Host` | `forbidden_origin` or `forbidden_host`, including when the identity headers are otherwise valid. |

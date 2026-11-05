@@ -27,16 +27,16 @@ Leave these Funnel mappings untouched:
 On the Mac, outside any git checkout:
 
 ```bash
-shasum -a 256 -c ollamachat-mcp-bridge-2.0.1.tar.gz.sha256
-tar -xzf ollamachat-mcp-bridge-2.0.1.tar.gz
-cd ollamachat-mcp-bridge-2.0.1
+shasum -a 256 -c ollamachat-mcp-bridge-2.0.2.tar.gz.sha256
+tar -xzf ollamachat-mcp-bridge-2.0.2.tar.gz
+cd ollamachat-mcp-bridge-2.0.2
 npm ci --omit=dev
 npm test
 ```
 
 `npm test` runs the automated tests that ship inside the archive. It must report a test count greater than 0. A report of 0 tests is a broken archive; `npm test` exits non-zero in that case. The tests use Node's built-in test runner and `express`, which is a runtime dependency. There is no separate test-only npm package and no fixture file to install. `npm ci --omit=dev` is enough. The tests do not launch Peekaboo or join a tailnet.
 
-`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.1.
+`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.2. The 2.0.1 archive has no Ollama proxy.
 
 ## 2. Write a local policy
 
@@ -60,6 +60,7 @@ Recommended first policy, still with placeholders:
   "identityMode": "user",
   "allowSensitiveObservation": false,
   "allowMutatingTools": false,
+  "ollamaProxy": true,
   "peekaboo": {
     "enabled": true,
     "command": "/opt/homebrew/bin/peekaboo",
@@ -71,7 +72,8 @@ Recommended first policy, still with placeholders:
 
 - `allowedHosts` must include the MagicDNS name Serve will put in `Host`, without the port. `mac-studio.example.ts.net` is a placeholder.
 - `allowedLogins` is the exact Tailscale login Serve puts in `Tailscale-User-Login` (often `name@github` or an email). It is **not** a device id. Every device that user owns presents the same login.
-- `tools` starts at `permissions` only. See [PEEKABOO-ALLOWLIST.md](PEEKABOO-ALLOWLIST.md). Leave `allowSensitiveObservation` and `allowMutatingTools` false until you accept those risks.
+- `tools` stays `permissions` only. Do not enable screenshots or mutating Peekaboo tools until a later supervised change. See [PEEKABOO-ALLOWLIST.md](PEEKABOO-ALLOWLIST.md).
+- `ollamaProxy` defaults to false in `bridge-policy.example.json`. Set it true only in the local file to forward the fixed upstream `127.0.0.1:11434`. There is no URL setting.
 - `command` must be the absolute Peekaboo binary. `args` must stay `["mcp"]`.
 
 Confirm the binary you think you are pinning:
@@ -117,27 +119,20 @@ You want a new private HTTPS 38443 entry and the same Funnel 443 / 10000 / 8443 
 
 ## 4. Review the tailnet policy before any grant
 
-Do not append a grant and do not replace the live policy. Grants and ACLs are a union: a narrower rule does not remove a broader one. Read the current policy in the admin console first. Look for every `src` that can reach the Mac, every `ip` of `*`, `443`, `8443`, `10000`, `38443`, `18104`, `18100`, or `18084`, and every `app` value. Anything that already grants this capability, or that grants network access to the Mac for a user, group, `autogroup:member`, or `*`, still applies after you add a phone rule.
+The live tailnet policy is unchanged. Do not append this snippet and do not replace the policy until you have a screenshot of the current grants and ACLs and you add the change yourself. Grants are a union: a new rule does not remove a broader one. Read every `src` that can reach the Mac, every `ip` of `*`, `443`, `8443`, `10000`, `38443`, `18104`, `18100`, or `18084`, and every `app` value. An existing `*` or `autogroup:member` rule still applies after a more specific grant is added.
 
-`Tailscale-User-Login` is the user. Every device that user owns presents the same login. Serve does not send a node id. A user, group, `autogroup:self`, or `*` in `src` is not one phone.
+Access is the Tailscale account, not one phone and not a tag. Every device signed into that account presents the same `Tailscale-User-Login`. That is the scope that was approved. Do not add `tagOwners` and do not tag the Mac or the phone. Tagging would change device identity for the existing Funnel rules.
 
-An IP address or host alias in `src` is not a verified per-phone control. Tailscale's grant reference allows those selectors, and [tailscale/tailscale#15097](https://github.com/tailscale/tailscale/issues/15097) is still open: reporters find that IP and host-alias sources do not match, including for grants. This tailnet was not tested. Do not put the phone's Tailscale IP in `src` and treat the capability as device-limited.
-
-The selector the grant syntax actually uses for one device identity is a tag. Tag only the phone. Do not tag the Mac. A tag replaces that device's user identity for every existing grant, which can drop the Studio out of rules that still protect Funnel and the other listeners.
-
-This is a review snippet, with placeholders, in the shape from the [grants reference](https://tailscale.com/docs/reference/syntax/grants) (source tag, destination host alias, `ip` and `app` together). It is not an instruction to save it.
+Do not use the phone's Tailscale IP as `src`. [tailscale/tailscale#15097](https://github.com/tailscale/tailscale/issues/15097) is still open, and this tailnet was not tested. The grant reference's user selector is the account. `operator@example.com` below is a placeholder. The real login stays in the local `bridge-policy.json` `allowedLogins` and, when you edit policy, in `src`. It is not committed.
 
 ```json
 {
-  "tagOwners": {
-    "tag:ollamachat-phone": ["autogroup:admin"]
-  },
   "hosts": {
     "ollamachat-mac": "100.64.0.3"
   },
   "grants": [
     {
-      "src": ["tag:ollamachat-phone"],
+      "src": ["operator@example.com"],
       "dst": ["ollamachat-mac"],
       "ip": ["tcp:38443"],
       "app": {
@@ -150,18 +145,7 @@ This is a review snippet, with placeholders, in the shape from the [grants refer
 }
 ```
 
-`100.64.0.3` is a documentation address in the Tailscale CGNAT range, not this Mac. `ollamachat-mac` is the bare name from `hosts`, which is the grant reference's host-alias form. `tag:ollamachat-phone` matches only devices that carry that tag.
-
-A tagged phone does not receive `Tailscale-User-Login`. The local bridge policy for that setup is:
-
-```json
-"identityMode": "tagged",
-"allowedLogins": []
-```
-
-Tagged mode allows a request only when the login header is absent, the Funnel header is absent, and the capability array is present. An untagged laptop still gets a login header from Serve, so it stays denied even if some other grant also hands it the capability. Tagging is an ACL change you make yourself. No tag was applied from this package.
-
-Until that review is done, leave Serve unconfigured. Tailscale 1.104.4 can send the capability header; the phone grant is not in place.
+`100.64.0.3` is a documentation address, not this Mac. `dst` is the bare name from `hosts`, which is the form in the [grants reference](https://tailscale.com/docs/reference/syntax/grants). `src` is one user, so it includes every device signed into that account and no other account. Tailscale 1.104.4 can send the capability header. Serve is still not configured.
 
 ## 5. Start the bridge and check denials
 
@@ -177,16 +161,16 @@ curl -sS -D - http://127.0.0.1:3100/health -o /tmp/bridge-health.txt
 
 Expect HTTP 403 and `forbidden_identity`. Expect no `Access-Control-Allow-Origin` header.
 
-From another tailnet device that is not the granted phone, open `https://<magicdns>:38443/health`. Expect a Tailscale ACL denial, or HTTP 403 from the bridge if the packet was proxied without the capability. A 200 from that second device means the grant is not limited to one device.
+A device signed into a different Tailscale account should not receive the capability. If it can open the URL, the existing policy is broader than the snippet above.
 
-The iPhone app has not been run against this bridge. What the public guide says it sends, and what is still unknown, is in [OLLAMACHAT-CLIENT.md](OLLAMACHAT-CLIENT.md). The LAN example in that guide uses the bridge origin with no path prefix:
+The iPhone app has not been run against this bridge. Assumptions are in [OLLAMACHAT-CLIENT.md](OLLAMACHAT-CLIENT.md). Both settings use the same origin, with no path prefix and no bearer token:
 
-- Ollama URL: your existing local or tailnet Ollama URL. This package does not change Ollama or the Funnel ports in front of it.
+- Ollama URL: `https://<magicdns-name>:38443`
 - MCP Bridge URL: `https://<magicdns-name>:38443`
 
-No path prefix and no bearer token. The app appends `/health`, `/tools`, and `/call`. iOS needs HTTPS for a Tailscale address; plain `http://100.x.x.x:3100` is the wrong URL, and the bridge is not listening on the tailnet interface anyway.
+Ollama on the Mac stays at `127.0.0.1:11434`. The phone does not get a second port. iOS needs HTTPS for a Tailscale address. The bridge listens only on loopback, and Serve is the only forward. With `ollamaProxy` true, the phone's model calls use `/api/tags`, `/api/version`, `/api/show`, `/api/chat`, and `/api/generate`. MCP calls use `/health`, `/tools`, and `/call`.
 
-`GET /tools` should list at most `peekaboo__permissions` until you edit the policy. OllamaChat refreshes tools from that list and can call them when the model decides to. `gemma4:12b` can emit tool calls and is not a reliable Mac GUI agent. Do not enable click, type, or other mutating tools to compensate for that.
+`GET /tools` should list only `peekaboo__permissions`. Do not enable screenshot or mutating Peekaboo tools until a later supervised change. `gemma4:12b` can emit tool calls and is unreliable at Mac GUI tasks.
 
 ## 6. Cleanup
 
@@ -205,7 +189,7 @@ Confirm 443 → 18104, 10000 → 18100, and 8443 → 18084 are still present and
 Delete the unpacked directory if you do not want the files:
 
 ```bash
-rm -rf /path/to/ollamachat-mcp-bridge-2.0.1
+rm -rf /path/to/ollamachat-mcp-bridge-2.0.2
 ```
 
 That does not remove Peekaboo, Ollama, Tailscale, or Screen Recording permission. Those were not installed by this package.

@@ -9,6 +9,7 @@
   "identityMode": "user",
   "allowSensitiveObservation": false,
   "allowMutatingTools": false,
+  "ollamaProxy": false,
   "peekaboo": {
     "enabled": false,
     "command": "/opt/homebrew/bin/peekaboo",

@@ -11,12 +11,14 @@
  * are not a secret and are not accepted from a public Funnel request.
  *
  * Tailscale-User-Login is the user, shared by every device that user owns.
- * Per-device restriction is the grant `src` that decides whether Serve attaches
- * requiredAppCapability. This module cannot see a node id in the headers.
+ * The operator approved that scope for their own account: every device signed
+ * in as that login, with no tag and no per-phone selector in this bridge.
+ * The capability header is still required. This module cannot see a node id.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { classifyOllamaRoute } = require('./ollama-proxy');
 
 const POLICY_VERSION = 1;
 const DEFAULT_BIND_HOST = '127.0.0.1';
@@ -94,6 +96,7 @@ const TOP_LEVEL_FIELDS = new Set([
   'identityMode',
   'allowSensitiveObservation',
   'allowMutatingTools',
+  'ollamaProxy',
   'peekaboo',
 ]);
 
@@ -277,6 +280,7 @@ function defaultPolicy() {
     identityMode: 'user',
     allowSensitiveObservation: false,
     allowMutatingTools: false,
+    ollamaProxy: false,
     peekaboo: {
       enabled: false,
       command: '/opt/homebrew/bin/peekaboo',
@@ -314,6 +318,7 @@ function normalizePolicy(raw) {
     false
   );
   const allowMutatingTools = assertBoolean(raw.allowMutatingTools, 'allowMutatingTools', false);
+  const ollamaProxy = assertBoolean(raw.ollamaProxy, 'ollamaProxy', false);
 
   const allowedHosts = new Set(['localhost', '127.0.0.1', '::1']);
   const hostList = raw.allowedHosts === undefined ? [] : raw.allowedHosts;
@@ -381,6 +386,7 @@ function normalizePolicy(raw) {
     identityMode,
     allowSensitiveObservation,
     allowMutatingTools,
+    ollamaProxy,
     peekaboo: Object.freeze({
       enabled,
       command,
@@ -556,7 +562,14 @@ function checkIdentity(policy, headers) {
   return { ok: true, login };
 }
 
-function routeClass(method, requestPath) {
+function routeClass(method, requestPath, rawUrl, policy) {
+  const ollamaRoute = classifyOllamaRoute(
+    method,
+    requestPath,
+    rawUrl === undefined ? requestPath : rawUrl,
+    Boolean(policy && policy.ollamaProxy)
+  );
+  if (ollamaRoute) return ollamaRoute;
   const pathname = String(requestPath || '/').split('?')[0];
   const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   if (
@@ -579,7 +592,11 @@ function authorizeHttp(policy, req) {
   if (!origin.ok) return origin;
   const identity = checkIdentity(policy, req.headers);
   if (!identity.ok) return identity;
-  return { ok: true, login: identity.login, route: routeClass(req.method, req.path) };
+  return {
+    ok: true,
+    login: identity.login,
+    route: routeClass(req.method, req.path, req.originalUrl || req.url, policy),
+  };
 }
 
 function splitToolName(toolName) {
