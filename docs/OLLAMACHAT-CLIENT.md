@@ -47,6 +47,28 @@ Refused without contacting Ollama: `/api/pull`, `/api/push`, `/api/create`, `/ap
 
 This assumes the app uses Ollama's native routes. If it uses `/v1/chat/completions` or `/api/ps`, those calls fail until the app is captured and the allowlist is changed on purpose. The real iOS app has not been run against this proxy.
 
+## Discovery contract that is public
+
+`gardnerscot/ollamachat-mcp-bridge` `server.js` on `main` returns:
+
+- `GET /tools` as `{ "tools": [ { "name", "description", "inputSchema", "server" } ] }`
+- `GET /tools/openai` as a JSON array of `{ "type": "function", "function": { "name", "description", "parameters" } }`
+- `POST /call` with `{ "name", "arguments" }`
+
+This bridge still returns those shapes. `inputSchema` is copied from the MCP server. This process does not add `additionalProperties`. The guide says Refresh Tools loads the bridge list and that a later tool use is `POST /call`. It does not say whether Refresh Tools calls `/tools` or `/tools/openai`. The terminal helper in this repo loads `/tools/openai` and passes that array as Ollama's `tools` field. The public guide does not say the iOS app does that.
+
+`/api/chat` is forwarded as the original JSON bytes, including a `tools` array when the client sent one. The proxy does not build that array.
+
+## How to read the next log
+
+After one Refresh Tools and one chat, read the process log for lines starting with `[diag]`. Paths have no query string.
+
+- No `GET /tools` and no `GET /tools/openai`: those discovery requests did not reach this process.
+- `GET /tools` or `GET /tools/openai` with `tools=1` and `names=peekaboo__permissions`, then `POST /api/chat` with `request_tools=absent` or `request_tools=0`: the list was served, and that chat request did not carry tools.
+- `POST /api/chat` with `request_tools=1` and `request_tool_names=peekaboo__permissions` and `response_tool_calls=0`: Ollama received the tool and the model response contained no tool call.
+- `response_tool_calls=1` and no later `POST /call`: the model emitted a call and the app did not invoke the bridge.
+- `POST /call` with `tool=peekaboo__permissions`: the bridge executed the allowed tool.
+
 ## Still unknown because the app was not captured
 
 - Which path Test Connection requests, and whether it requires HTTP 200 with `"status": "ok"`.

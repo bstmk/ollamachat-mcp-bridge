@@ -26,6 +26,7 @@ const {
   toolAllowed,
 } = require('./security-policy');
 const { proxyOllama } = require('./ollama-proxy');
+const diagnostics = require('./diagnostics');
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -102,6 +103,15 @@ function createApp(options = {}) {
 
   app.disable('x-powered-by');
   app.use((req, res, next) => {
+    res.locals.diag = {};
+    res.on('finish', () => {
+      log(diagnostics.record({
+        method: req.method,
+        path: diagnostics.requestPath(req),
+        status: res.statusCode,
+        ...res.locals.diag,
+      }));
+    });
     const decision = authorizeHttp(policy, req);
     if (!decision.ok) return forbid(res, decision.status, decision.reason);
     if (decision.route === 'mutation') return forbid(res, 403, 'forbidden_configuration');
@@ -109,7 +119,10 @@ function createApp(options = {}) {
     if (decision.route === 'ollama-disabled') return forbid(res, 404, 'ollama_disabled');
     if (decision.route === 'unknown') return forbid(res, 404, 'not_found');
     if (decision.route === 'ollama') {
-      return proxyOllama(req, res, openUpstream ? { openUpstream } : {});
+      return proxyOllama(req, res, {
+        ...(openUpstream ? { openUpstream } : {}),
+        onDiagnostic(meta) { Object.assign(res.locals.diag, meta); },
+      });
     }
     return next();
   });
@@ -127,6 +140,8 @@ function createApp(options = {}) {
   app.get('/tools', async (_req, res) => {
     try {
       const tools = await manager.getTools();
+      res.locals.diag.tools = tools.length;
+      res.locals.diag.tool_names = tools.map((tool) => tool.name);
       res.json({ tools });
     } catch (err) {
       logError('GET /tools failed', err);
@@ -137,6 +152,8 @@ function createApp(options = {}) {
   app.get('/tools/openai', async (_req, res) => {
     try {
       const tools = await manager.getToolsOpenAI();
+      res.locals.diag.tools = tools.length;
+      res.locals.diag.tool_names = tools.map((tool) => tool.function && tool.function.name);
       res.json(tools);
     } catch (err) {
       logError('GET /tools/openai failed', err);
@@ -150,6 +167,7 @@ function createApp(options = {}) {
       return res.status(400).json({ error: 'Bad request', detail: 'JSON object required' });
     }
     const { name, arguments: args } = body;
+    if (typeof name === 'string') res.locals.diag.tool = name;
     if (!name || typeof name !== 'string') {
       return res.status(400).json({
         error: 'Bad request',

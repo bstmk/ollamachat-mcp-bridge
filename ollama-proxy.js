@@ -10,6 +10,7 @@
  */
 
 const http = require('http');
+const { chatRequestTools, ndjsonToolCalls } = require('./diagnostics');
 
 const UPSTREAM_HOST = '127.0.0.1';
 const UPSTREAM_PORT = 11434;
@@ -187,6 +188,10 @@ function proxyOllama(req, res, deps) {
   }
 
   const startUpstream = (body) => {
+    const responseTools = pathValue === '/api/chat' ? ndjsonToolCalls() : null;
+    if (pathValue === '/api/chat' && typeof deps.onDiagnostic === 'function') {
+      deps.onDiagnostic(chatRequestTools(body));
+    }
     if (limits.body) headers['content-length'] = String(body.length);
     let upstreamReq;
     try {
@@ -255,6 +260,7 @@ function proxyOllama(req, res, deps) {
       res.setHeader('X-Accel-Buffering', 'no');
       upstreamRes.on('data', (chunk) => {
         idle.bump();
+        if (responseTools) responseTools.push(chunk);
         const ok = res.write(chunk);
         if (!ok) upstreamRes.pause();
       });
@@ -263,6 +269,9 @@ function proxyOllama(req, res, deps) {
       });
       upstreamRes.on('end', () => {
         idle.clear();
+        if (responseTools && typeof deps.onDiagnostic === 'function') {
+          deps.onDiagnostic(responseTools.finish());
+        }
         res.end();
       });
       upstreamRes.on('error', () => {
