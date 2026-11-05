@@ -27,16 +27,19 @@ Leave these Funnel mappings untouched:
 On the Mac, outside any git checkout:
 
 ```bash
-shasum -a 256 -c ollamachat-mcp-bridge-2.0.2.tar.gz.sha256
-tar -xzf ollamachat-mcp-bridge-2.0.2.tar.gz
-cd ollamachat-mcp-bridge-2.0.2
+shasum -a 256 -c ollamachat-mcp-bridge-2.0.3.tar.gz.sha256
+tar -xzf ollamachat-mcp-bridge-2.0.3.tar.gz
+cd ollamachat-mcp-bridge-2.0.3
 npm ci --omit=dev
 npm test
+npm audit --omit=dev --audit-level=high
 ```
+
+`npm test` checks behavior. `npm audit --omit=dev --audit-level=high` checks the installed production tree and exits non-zero when a critical or high advisory is still present. A passing test run is not that audit.
 
 `npm test` runs the automated tests that ship inside the archive. It must report a test count greater than 0. A report of 0 tests is a broken archive; `npm test` exits non-zero in that case. The tests use Node's built-in test runner and `express`, which is a runtime dependency. There is no separate test-only npm package and no fixture file to install. `npm ci --omit=dev` is enough. The tests do not launch Peekaboo or join a tailnet.
 
-`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.2. The 2.0.1 archive has no Ollama proxy.
+`node --test` with no arguments also finds `test/*.test.js` once the archive is intact. The 2.0.0 archive omitted that directory, so both commands reported 0 tests and exited 0. Use 2.0.3. Earlier archives are not the dependency fix.
 
 ## 2. Write a local policy
 
@@ -189,7 +192,7 @@ Confirm 443 → 18104, 10000 → 18100, and 8443 → 18084 are still present and
 Delete the unpacked directory if you do not want the files:
 
 ```bash
-rm -rf /path/to/ollamachat-mcp-bridge-2.0.2
+rm -rf /path/to/ollamachat-mcp-bridge-2.0.3
 ```
 
 That does not remove Peekaboo, Ollama, Tailscale, or Screen Recording permission. Those were not installed by this package.

@@ -6,6 +6,9 @@ ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/dist}"
 STAGE="$(mktemp -d)"
 
+cd "$ROOT"
+npm audit --omit=dev --audit-level=high
+
 export PACK_ROOT="$ROOT"
 export PACK_STAGE="$STAGE"
 export PACK_OUT="$OUT_DIR"
